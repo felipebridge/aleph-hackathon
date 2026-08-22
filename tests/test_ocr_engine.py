@@ -50,20 +50,12 @@ def test_get_ocr_engine_rejects_unknown_name():
 
 
 def test_get_ocr_engine_auto_always_resolves_to_something():
-    # `auto` must never fail outright: SidecarMockEngine.is_available() is
-    # always True, so the auto-degrade chain always terminates successfully.
     engine = get_ocr_engine("auto")
     assert engine.name in {"qvac", "tesseract", "mock"}
 
 
 class TestPdfRasterization:
-    """PDF support is implemented once, shared by both real OCR engines, on
-    top of pypdfium2 -- a pure-wheel local renderer with no system Poppler/
-    PDF binary dependency. These tests cover the shared rasterization path
-    directly; TesseractOCREngine.read() is covered below with a stubbed
-    pytesseract, since the Tesseract *binary* isn't assumed to be installed
-    wherever these tests run.
-    """
+    """Covers the shared pypdfium2 rasterization path used by both engines."""
 
     def test_plain_image_passes_through_unchanged(self, tmp_path: Path):
         image_path = tmp_path / "receipt.png"
@@ -109,9 +101,7 @@ class TestTesseractPdfSupport:
             seen_sizes.append(img.size)
             return f"page {len(seen_sizes)} text"
 
-        # The Tesseract *binary* isn't assumed to be on PATH in the test
-        # environment -- stub pytesseract's call so only our rasterization
-        # + per-page-merge logic is under test, not the binary itself.
+        # Stub the binary call -- only rasterization + page-merge is under test.
         monkeypatch.setattr(pytesseract, "image_to_string", fake_image_to_string)
 
         result = TesseractOCREngine().read(pdf_path)

@@ -1,10 +1,4 @@
-"""Unit tests for the core reconciliation business logic.
-
-These are the tests that matter most for the Product Manager's business
-rules: they pin down exactly what counts as a clean match vs. each flavour
-of discrepancy, using small hand-built fixtures instead of the sample data
-generator so each scenario is isolated and easy to reason about.
-"""
+"""Unit tests for the core reconciliation business logic."""
 
 from __future__ import annotations
 
@@ -93,8 +87,7 @@ class TestCleanMatch:
 
         assert result.matched == []
         types = [d.type for d in result.discrepancies]
-        # The receipt has no candidate within tolerance, AND the untouched
-        # bank row is itself now unaccounted-for -- both are correct findings.
+        # No candidate within tolerance, and the untouched bank row is now unaccounted-for.
         assert DiscrepancyType.MISSING_IN_BANK in types
         assert DiscrepancyType.UNACCOUNTED_CHARGE in types
 
@@ -163,9 +156,7 @@ class TestMerchantNormalization:
         raw_score = fuzz.token_sort_ratio("starbucks coffee", "starbucks store #4521")
         normalized_score = _merchant_similarity("Starbucks Coffee", "STARBUCKS STORE #4521")
 
-        # Without stripping the store number, this pair would score BELOW
-        # the default 60 threshold and fail to match at all -- that's
-        # exactly the bug normalization fixes.
+        # Unstripped, this pair scores below the default 60 threshold -- the bug normalization fixes.
         assert raw_score < 60
         assert normalized_score >= 60
 
@@ -186,9 +177,7 @@ class TestAmountDateOnlyFallback:
         bank_df = make_bank_df(
             [dict(transaction_id="TXN-1", date="2026-08-11", amount=45.99, merchant="Office Depot", description="OFFICE DEPOT #221")]
         )
-        # Simulates badly garbled OCR on the store name -- similarity to
-        # "Office Depot" should be far below the default 60 threshold.
-        receipt = make_receipt("Xq7 Zw2 Depqt", 45.99, dt.date(2026, 8, 11))
+        receipt = make_receipt("Xq7 Zw2 Depqt", 45.99, dt.date(2026, 8, 11))  # garbled OCR merchant
 
         result = reconcile([receipt], bank_df, make_settings())
 

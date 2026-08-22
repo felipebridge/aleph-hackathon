@@ -1,12 +1,5 @@
-"""Renders a :class:`ReconciliationResult` as a terminal report and a
-plain-text file, per the hackathon brief: "a terminal log or .txt report
-flagging ONLY the discrepancies."
-
-Two outputs, one source of truth:
-  * A rich, colour-coded terminal view for the live demo.
-  * A plain-text file (no ANSI codes) meant to be attached to an email /
-    filed as an audit artifact -- so it has to render sensibly with just
-    `cat`/Notepad too.
+"""Renders a :class:`ReconciliationResult` as a rich terminal view and a
+plain-text (.txt) report that reads fine in `cat`/Notepad too.
 """
 
 from __future__ import annotations

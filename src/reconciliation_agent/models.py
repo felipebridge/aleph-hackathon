@@ -25,7 +25,6 @@ class DiscrepancyType(str, Enum):
     """The taxonomy of reconciliation outcomes we can detect."""
 
     AMOUNT_MISMATCH = "AMOUNT_MISMATCH"
-    DATE_MISMATCH = "DATE_MISMATCH"
     MISSING_IN_BANK = "MISSING_IN_BANK"  # receipt with no bank charge
     UNACCOUNTED_CHARGE = "UNACCOUNTED_CHARGE"  # bank charge with no receipt
     DUPLICATE_RECEIPT = "DUPLICATE_RECEIPT"  # two receipts, one bank charge
@@ -83,7 +82,6 @@ class Discrepancy:
     receipt: Receipt | None = None
     bank_txn: BankTransaction | None = None
     delta_amount: float | None = None
-    extra: dict = field(default_factory=dict)
 
 
 @dataclass(slots=True)

@@ -1,10 +1,4 @@
-"""Command-line entry point that wires the whole pipeline together.
-
-    receipts dir --> OCR engine --> extractor --> matcher (+ bank CSV) --> report
-
-Every stage is a separate, independently-testable module; this file's only
-job is orchestration and argument parsing.
-"""
+"""CLI entry point: receipts dir -> OCR -> extractor -> matcher (+ bank CSV) -> report."""
 
 from __future__ import annotations
 
@@ -138,8 +132,7 @@ def load_receipts(receipts_dir: Path, ocr_engine_name: str, console: Console) ->
                 continue
             receipts.append(parse_receipt(ocr_result, path))
     finally:
-        # Engines that own a background worker/model (QVAC) release it here;
-        # engines without one (Tesseract, mock) simply have no close().
+        # QVAC owns a background worker/model and needs releasing; others don't.
         close = getattr(engine, "close", None)
         if close is not None:
             close()

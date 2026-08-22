@@ -7,11 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from reconciliation_agent.bank_loader import (
-    BankStatementError,
-    load_bank_statement,
-    to_transactions,
-)
+from reconciliation_agent.bank_loader import BankStatementError, load_bank_statement
 
 
 def _write_csv(tmp_path: Path, content: str) -> Path:
@@ -69,17 +65,3 @@ def test_auto_generates_transaction_id_when_absent(tmp_path: Path):
     csv_path = _write_csv(tmp_path, "date,amount,merchant\n2026-08-10,4.75,Starbucks\n")
     df = load_bank_statement(csv_path)
     assert df.iloc[0]["transaction_id"] == "TXN-0001"
-
-
-def test_to_transactions_round_trip(tmp_path: Path):
-    csv_path = _write_csv(
-        tmp_path,
-        "transaction_id,date,amount,merchant,description\n"
-        "TXN-1,2026-08-10,4.75,Starbucks,STARBUCKS STORE #4521\n",
-    )
-    df = load_bank_statement(csv_path)
-    txns = to_transactions(df)
-
-    assert len(txns) == 1
-    assert txns[0].transaction_id == "TXN-1"
-    assert txns[0].amount == 4.75

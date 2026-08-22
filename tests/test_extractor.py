@@ -61,8 +61,6 @@ class TestExtractAmount:
         assert extract_amount(text) == 50.0
 
     def test_bare_integer_fallback_never_outranks_a_cents_precise_amount(self):
-        # A garbled OCR line that reads as a bare-integer "total" must never
-        # beat a properly formatted, cents-precise total found elsewhere.
         text = "Diner\nTOTAL DUE (approx) 46\nTOTAL   $45.99\n"
         assert extract_amount(text) == 45.99
 
@@ -81,12 +79,9 @@ class TestExtractDate:
         assert extract_date("Merchant\nTOTAL 10.00") is None
 
     def test_unambiguous_day_first_slash_date_overrides_us_default(self):
-        # 22 can't be a month, so this must be read as 22 Aug 2026 even
-        # though the default convention elsewhere is US month/day order.
         assert extract_date("Receipt\n22/08/2026\nTOTAL 10.00") == dt.date(2026, 8, 22)
 
     def test_ambiguous_slash_date_defaults_to_us_month_day_order(self):
-        # Both components are <= 12: genuinely ambiguous, defaults to MM/DD.
         assert extract_date("Receipt\n08/10/2026\nTOTAL 10.00") == dt.date(2026, 8, 10)
 
 
@@ -103,17 +98,10 @@ class TestExtractMerchant:
         assert extract_merchant(text) == "Uber"
 
     def test_prefers_store_name_over_leading_address_line_when_both_present(self):
-        # Simulates a photographed receipt where the logo/header OCR'd fine
-        # for once, but a naive "always take line 1" heuristic would still
-        # be tempted by the address if it scored the same -- this pins the
-        # store name winning even though the address line comes first here.
         text = "123 Market Street, San Francisco CA\nStarbucks Coffee\nTOTAL 4.75"
         assert extract_merchant(text) == "Starbucks Coffee"
 
     def test_falls_back_to_address_line_when_nothing_better_exists(self):
-        # If the store name line is genuinely unrecoverable, still return
-        # *something* plausible rather than None -- a human reviewing the
-        # report can eyeball the source image.
         text = "123 Market Street\nTOTAL 4.75"
         assert extract_merchant(text) == "123 Market Street"
 

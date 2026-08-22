@@ -1,18 +1,10 @@
-"""Loads and normalises the bank statement CSV export.
-
-Kept deliberately separate from the matching logic so the "what does a
-valid bank export look like" concern lives in one place, and so the
-matcher can be unit-tested against plain lists of :class:`BankTransaction`
-without touching pandas or the filesystem at all.
-"""
+"""Loads and normalises the bank statement CSV export into a pandas DataFrame."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
 import pandas as pd
-
-from .models import BankTransaction
 
 REQUIRED_COLUMNS = {"date", "amount", "merchant"}
 
@@ -88,17 +80,3 @@ def load_bank_statement(csv_path: Path) -> pd.DataFrame:
         )
 
     return df[["transaction_id", "date", "amount", "merchant", "description"]]
-
-
-def to_transactions(df: pd.DataFrame) -> list[BankTransaction]:
-    """Convert the normalised DataFrame into typed :class:`BankTransaction` rows."""
-    return [
-        BankTransaction(
-            transaction_id=row.transaction_id,
-            txn_date=row.date,
-            amount=row.amount,
-            merchant=row.merchant,
-            description=row.description,
-        )
-        for row in df.itertuples(index=False)
-    ]

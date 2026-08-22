@@ -1,33 +1,8 @@
 #!/usr/bin/env python
-"""Generates the mock dataset used to demo the reconciliation agent.
-
-Produces:
-  * data/bank_statement.csv  -- a simulated bank export (8 transactions).
-  * data/receipts/*.png      -- 8 synthetic "photographed" receipts,
-                                 rendered locally with Pillow.
-  * data/receipts/*.png.ocr.txt -- the ground-truth OCR text for each
-                                 receipt, used by the `mock` OCR engine so
-                                 the full pipeline runs identically on any
-                                 machine, with or without Tesseract/QVAC
-                                 installed (handy with a 24h clock running).
-
-The scenarios are deliberately designed to exercise every discrepancy type
-the matcher can detect:
-
-  01 Starbucks        -> clean match
-  02 Office Depot      -> AMOUNT_MISMATCH  (receipt $45.99, bank $459.90)
-  03 Uber               -> AMOUNT_MISMATCH  (receipt $23.50, bank $28.50)
-  04 Amazon Web Services -> MISSING_IN_BANK  (no bank charge at all)
-  05 Costco Wholesale    -> clean match
-  06 Delta Air Lines     -> clean match, date 3 days before bank posting
-  07 Shell Gas Station   -> clean match
-  08 Shell Gas Station (dup) -> DUPLICATE_RECEIPT (same purchase re-submitted)
-
-  Bank-only, no receipt:
-  TXN-1007 Wire Transfer $1,200.00 -> UNACCOUNTED_CHARGE (CRITICAL)
-  TXN-1008 Vending Co    $6.50     -> UNACCOUNTED_CHARGE (WARNING)
-
-Run with: python scripts/generate_sample_data.py
+"""Generates the demo dataset: data/bank_statement.csv + 8 sample receipts
+under data/receipts/ (a rendered PNG plus a ground-truth .ocr.txt sidecar
+each), covering every discrepancy type the matcher detects. See README.md
+section 9 for what each scenario exercises.
 """
 
 from __future__ import annotations
@@ -185,12 +160,8 @@ RECEIPT_SCENARIOS = [
 
 
 def _load_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-    """Best-effort monospace font lookup that degrades gracefully.
-
-    Rendering is cosmetic only (the pipeline reads the .ocr.txt sidecar by
-    default, see ocr_engine.SidecarMockEngine), so a missing TTF must never
-    break sample-data generation on an unfamiliar machine.
-    """
+    """Monospace font lookup that degrades gracefully -- rendering is cosmetic
+    only, so a missing TTF must never break sample-data generation."""
     candidates = [
         "consola.ttf",  # Windows Consolas
         "cour.ttf",  # Windows Courier New
@@ -207,8 +178,7 @@ def _load_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
 
 
 def render_receipt_image(scenario: ReceiptScenario, out_dir: Path) -> Path:
-    """Draw a simple, clean receipt-style PNG so the demo has real images
-    to point at (in addition to the deterministic OCR sidecar)."""
+    """Draw a simple receipt-style PNG for the demo to point at."""
     font = _load_font(20)
     line_height = 26
     padding = 24

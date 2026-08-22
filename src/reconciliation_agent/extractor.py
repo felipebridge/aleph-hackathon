@@ -1,15 +1,8 @@
 """Turns raw OCR text into a structured :class:`Receipt`.
 
-This is the "NLP-to-Finance" step: receipts are unstructured, noisy text
-blocks (misaligned columns, OCR typos, inconsistent layouts) and we need to
-reliably pull out three fields a bank statement can be matched against:
-merchant, amount, and date.
-
-The heuristics below are intentionally conservative -- a missed field
-(``None``) is far better than a confidently wrong one, since a wrong amount
-or date would silently corrupt the reconciliation. Every skipped field is
-still surfaced in the terminal report so a human can eyeball the source
-file.
+Heuristics are conservative on purpose: a missing field (``None``) beats a
+confidently wrong one, since a bad amount or date would silently corrupt
+the reconciliation.
 """
 
 from __future__ import annotations
@@ -78,19 +71,8 @@ def _is_skip_line(lowered: str) -> bool:
 
 
 def extract_amount(text: str) -> float | None:
-    """Best-effort extraction of the receipt's total amount.
-
-    Strategy, in order:
-      1. A cents-precise amount on a line that looks like a total/balance-due
-         line (last one wins if several -- the final grand total is
-         conventionally printed last).
-      2. The largest cents-precise amount anywhere in the document (on a
-         real receipt the grand total is virtually always the largest
-         figure -- larger than any single line item, subtotal, or tax line).
-      3. A bare whole-number amount on a total line, for receipts that omit
-         cents entirely (e.g. "TOTAL $50"). Only used when nothing above
-         matched anything, so it never outranks a properly formatted amount.
-    """
+    """Total amount: prefer a cents-precise total-line match, else the
+    largest cents-precise number in the doc, else a bare int on a total line."""
     candidates_on_total_lines: list[float] = []
     all_candidates: list[float] = []
     int_candidates_on_total_lines: list[float] = []
@@ -141,14 +123,8 @@ _SLASH_DATE_RE = re.compile(r"^(\d{1,2})[/\-.](\d{1,2})[/\-.](\d{2,4})$")
 
 
 def _parse_date_token(raw: str):
-    """Parse one candidate date substring, resolving day/month ambiguity.
-
-    Receipts aren't all printed MM/DD/YYYY (US) -- plenty of POS systems
-    print DD/MM/YYYY (most everywhere else). For an unambiguous token (an
-    ISO date, or a slash-date where one component is > 12) we trust the
-    unambiguous reading; for a genuinely ambiguous "08/09/2026" we default
-    to the US convention, which matches the sample bank data's format.
-    """
+    """Parse a candidate date, preferring an unambiguous day/month reading
+    (component > 12 can only be the day) over the US MM/DD default."""
     slash_match = _SLASH_DATE_RE.match(raw)
     if slash_match:
         first, second = int(slash_match.group(1)), int(slash_match.group(2))
@@ -186,25 +162,17 @@ _NOISE_LINE_RE = re.compile(
 
 _LEADING_DIGITS_RE = re.compile(r"^\d")
 
-# How many leading non-noise lines we're willing to consider as the store
-# name. Real receipts put it on line 1, but OCR sometimes mangles a logo
-# into garbage that gets filtered out as noise first -- looking a little
-# further down catches those without wandering into the middle of the
-# itemized list.
+# Store name is almost always the first printed line, but a garbled logo
+# can knock it a few lines down -- look this far before giving up.
 _MERCHANT_SEARCH_WINDOW = 6
 
 
 def _merchant_candidate_score(line: str, position: int) -> float:
-    """Higher is more likely to be the store name; used to pick among the
-    first few plausible lines instead of blindly trusting line 1.
-
-    Address and phone lines ("123 Market Street", "(415) 555-0199") are the
-    most common false positive when the true first line got OCR'd into
-    noise and filtered out, so both are penalised heavily.
-    """
-    score = 100.0 - position * 5  # earlier lines are more likely the header
+    """Higher = more likely the store name. Penalizes address/phone lines
+    (leading digits, high digit ratio), the most common false positive."""
+    score = 100.0 - position * 5
     if _LEADING_DIGITS_RE.match(line):
-        score -= 60  # "123 Main St", "(415) 555-0199", phone/address lines
+        score -= 60
     digit_ratio = sum(ch.isdigit() for ch in line) / len(line)
     score -= digit_ratio * 80
     if not (2 <= len(line) <= 50):
@@ -213,24 +181,15 @@ def _merchant_candidate_score(line: str, position: int) -> float:
 
 
 def extract_merchant(text: str) -> str | None:
-    """Best-effort extraction of the merchant/store name.
-
-    Physical receipts almost universally print the store name as the very
-    first printed line (letterhead-style). We scan the first few
-    non-empty, non-noise lines and score each one, so a garbled first line
-    (common with real photographed receipts) doesn't cause an address or
-    phone-number line to be mistaken for the store name.
-    """
+    """Store name: score the first few non-noise lines and take the best,
+    instead of blindly trusting line 1 (which OCR often garbles)."""
     candidates: list[tuple[str, float]] = []
     for line in text.splitlines():
         stripped = line.strip()
         if not stripped or _NOISE_LINE_RE.match(stripped):
             continue
-        # Skip lines that are only punctuation/digits (e.g. "======", phone numbers)
-        if not re.search(r"[A-Za-z]{2,}", stripped):
+        if not re.search(r"[A-Za-z]{2,}", stripped):  # e.g. "======", phone numbers
             continue
-        # Skip item/price/total lines -- a line with a currency-shaped
-        # amount, or a total/tax/subtotal keyword, is never the store name.
         lowered = stripped.lower()
         if _AMOUNT_RE.search(stripped) or _is_total_line(lowered) or _is_skip_line(lowered):
             continue

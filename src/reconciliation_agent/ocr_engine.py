@@ -1,17 +1,8 @@
-"""Local OCR engines.
+"""Local OCR engines -- the only module allowed to touch the QVAC SDK.
 
-This is the ONLY module that is allowed to touch the Tether QVAC SDK. That
-isolation is deliberate: every other module in the pipeline talks to the
-:class:`BaseOCREngine` interface, not to the SDK directly, so
-
-  1. the business logic (matcher.py) never depends on how the pixels turned
-     into text, and
-  2. we can develop and demo the full reconciliation pipeline even before/
-     without the exact QVAC SDK call signature being finalised, by swapping
-     in a fallback engine -- with zero changes anywhere else.
-
-Every engine implemented here runs 100% locally. Nothing in this file makes
-a network call; that is the privacy guarantee the whole project rests on.
+Everything else talks to :class:`BaseOCREngine`, not the SDK directly, so
+swapping engines never touches business logic. Every engine here runs
+100% locally -- no network calls anywhere in this file.
 """
 
 from __future__ import annotations
@@ -31,11 +22,7 @@ logger = logging.getLogger(__name__)
 
 SUPPORTED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".pdf", ".tiff", ".bmp"}
 
-#: DPI-equivalent scale used when rasterizing a PDF page to an image.
-#: 2.0 (~144 DPI at PDFium's 72-DPI base) is a good OCR-accuracy/speed
-#: tradeoff for printed receipts/invoices -- higher mostly just slows down
-#: Tesseract without meaningfully improving recognition on clean text.
-_PDF_RENDER_SCALE = 2.0
+_PDF_RENDER_SCALE = 2.0  # ~144 DPI: good OCR accuracy/speed tradeoff for printed receipts
 
 
 class OcrEngineError(RuntimeError):
@@ -43,13 +30,7 @@ class OcrEngineError(RuntimeError):
 
 
 def _render_pdf_pages(file_path: Path):
-    """Rasterize every page of a local PDF to a Pillow image.
-
-    Uses `pypdfium2`, which bundles Google's PDFium renderer as a native
-    wheel -- no system-installed PDF/Poppler binary required, keeping PDF
-    support consistent with the rest of this project's "100% local, no
-    extra install steps" story.
-    """
+    """Rasterize every page of a PDF to a Pillow image (pypdfium2, no system Poppler needed)."""
     try:
         import pypdfium2 as pdfium
     except ImportError as exc:
@@ -67,14 +48,7 @@ def _render_pdf_pages(file_path: Path):
 
 @contextlib.contextmanager
 def _resolve_attachment_paths(file_path: Path):
-    """Yield the list of local image paths an OCR engine should read for
-    `file_path` -- the file itself for a plain image, or one temporary PNG
-    per page for a PDF (cleaned up on exit).
-
-    Centralising this means both the QVAC engine (multi-attachment chat)
-    and the Tesseract engine (one `image_to_string` call per page) treat a
-    multi-page PDF identically instead of duplicating rasterization logic.
-    """
+    """Yield image paths to OCR: the file itself, or one temp PNG per PDF page."""
     if file_path.suffix.lower() != ".pdf":
         yield [file_path]
         return
@@ -104,36 +78,22 @@ class BaseOCREngine(abc.ABC):
 
 
 class QVACOcrEngine(BaseOCREngine):
-    """Wraps Tether's local `tetherto-qvac-sdk` for offline OCR + NLP.
+    """Offline OCR + NLP via Tether's local `tetherto-qvac-sdk`.
 
-    QVAC's client spawns (or attaches to) a local worker process and talks
-    to it over an RPC transport -- there is no network socket to the
-    outside world involved at any point, which is precisely why it is the
-    primary engine for this project (see README for the privacy rationale).
+    The SDK's client spawns a local worker process and talks RPC to it --
+    no network socket involved. Its public surface is a general LLM client
+    (`Client`, `load_model`, `completion`), not a dedicated `run_ocr()`, so
+    OCR happens by loading a small on-device vision model and sending the
+    receipt image as a chat attachment alongside a transcription prompt.
 
-    Integration approach: the SDK's public surface is a general local LLM
-    inference client (`Client`, `load_model`, `completion(...)`), not a
-    dedicated `run_ocr()` call. We get OCR + "NLP-to-Finance" in a single
-    step by loading a small on-device multimodal (vision-capable) model and
-    sending the receipt image as a chat `attachment` alongside a
-    transcription prompt -- confirmed against the installed SDK's generated
-    schema (`CompletionStreamRequestHistoryItem.attachments[].path`).
-
-    The SDK's public API is fully async (`async with Client() as client`),
-    while the rest of this pipeline is a small synchronous CLI script. To
-    avoid dragging asyncio through every other module, this class owns a
-    single background event loop thread and marshals calls onto it -- the
-    Client, the RPC worker process, and the loaded model are all kept alive
-    and reused across every receipt in the run instead of paying
-    worker-startup + model-load cost per file.
+    The SDK is async; the rest of this CLI isn't. Rather than dragging
+    asyncio through every module, this class runs a background event-loop
+    thread and marshals calls onto it, keeping the worker process and
+    loaded model warm across every receipt instead of restarting per file.
     """
 
     name = "qvac"
-
-    #: Small local vision-language model good enough to transcribe printed
-    #: receipt text. Override via QVACOcrEngine(model_src=...) to swap in a
-    #: larger/more accurate model available in your QVAC model registry.
-    DEFAULT_MODEL_SRC = "SMOLVLM2_500M_MULTIMODAL_Q8_0"
+    DEFAULT_MODEL_SRC = "SMOLVLM2_500M_MULTIMODAL_Q8_0"  # override via model_src=...
 
     OCR_PROMPT = (
         "You are a receipt-scanning OCR engine. Transcribe every line of "
@@ -149,8 +109,6 @@ class QVACOcrEngine(BaseOCREngine):
         self._thread: threading.Thread | None = None
         self._client = None
         self._model_id: str | None = None
-
-    # --- background event-loop plumbing -----------------------------------
 
     def _ensure_loop(self) -> asyncio.AbstractEventLoop:
         if self._loop is None:
@@ -178,8 +136,6 @@ class QVACOcrEngine(BaseOCREngine):
             self._thread.join(timeout=5)
         self._loop, self._thread, self._client, self._model_id = None, None, None, None
 
-    # --- SDK plumbing -------------------------------------------------------
-
     async def _ensure_client(self):
         if self._client is None:
             from tetherto.qvac_sdk import Client
@@ -205,8 +161,7 @@ class QVACOcrEngine(BaseOCREngine):
         client = await self._ensure_client()
         model_id = await self._ensure_model()
 
-        # A multi-page PDF becomes one attachment per rasterized page --
-        # the model reads the whole document in a single completion call.
+        # Multi-page PDF -> one attachment per rasterized page in one call.
         with _resolve_attachment_paths(file_path) as attachment_paths:
             run = completion(
                 client.transport,
@@ -222,8 +177,6 @@ class QVACOcrEngine(BaseOCREngine):
             )
             final = await run.final
         return OcrResult(text=final.content_text, engine_name=self.name, confidence=1.0)
-
-    # --- BaseOCREngine interface --------------------------------------------
 
     def is_available(self) -> bool:
         try:
@@ -246,12 +199,7 @@ class QVACOcrEngine(BaseOCREngine):
 
 
 class TesseractOCREngine(BaseOCREngine):
-    """Fallback local OCR using Tesseract via pytesseract + Pillow.
-
-    Fully offline (Tesseract is a local binary, no API calls). Used when
-    the QVAC SDK is unavailable in the current dev environment, or
-    explicitly requested with --ocr-engine tesseract.
-    """
+    """Fallback OCR using the local Tesseract binary via pytesseract."""
 
     name = "tesseract"
 
@@ -283,14 +231,8 @@ class TesseractOCREngine(BaseOCREngine):
 
 
 class SidecarMockEngine(BaseOCREngine):
-    """Deterministic OCR stand-in used for demos and unit tests.
-
-    Reads a `<receipt>.ocr.txt` file placed next to the receipt image
-    (produced by `scripts/generate_sample_data.py`) instead of doing real
-    computer vision. This guarantees the end-to-end pipeline is
-    demonstrable on any machine, with or without Tesseract/QVAC installed,
-    which matters a lot with a 24h clock running.
-    """
+    """Reads a `<receipt>.ocr.txt` sidecar instead of doing real OCR -- keeps the
+    pipeline demoable without Tesseract or a QVAC worker installed."""
 
     name = "mock"
 
@@ -318,13 +260,7 @@ _ENGINES: dict[str, type[BaseOCREngine]] = {
 
 
 def get_ocr_engine(name: str = "auto") -> BaseOCREngine:
-    """Resolve the requested engine name to a ready-to-use instance.
-
-    ``auto`` (the default) tries the real, on-device AI engine first and
-    transparently degrades: QVAC -> Tesseract -> deterministic mock. This
-    keeps `python main.py` working out of the box during the hackathon
-    regardless of which machine/demo laptop it runs on.
-    """
+    """Resolve an engine name to a ready instance. "auto" degrades QVAC -> Tesseract -> mock."""
     if name != "auto":
         cls = _ENGINES.get(name)
         if cls is None:

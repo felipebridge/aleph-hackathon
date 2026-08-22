@@ -1,39 +1,7 @@
 """Core reconciliation logic: receipts vs. bank statement.
 
-This is the module the Product Manager cares most about getting right --
-it encodes the actual business rules for what counts as "reconciled",
-"a discrepancy", or "fraud-worth-a-look". Everything here operates on
-plain Python objects / a pandas DataFrame; there is no OCR or I/O concern
-in this file, which is what makes it straightforward to unit test with
-hand-built fixtures.
-
-Algorithm (per receipt, in order):
-  1. Skip receipts the extractor couldn't fully parse -- flag for manual
-     review instead of guessing.
-  2. Build the candidate pool: bank rows not already claimed by an earlier
-     receipt, within `date_tolerance_days` of the receipt date.
-  3. Score each candidate by merchant-name similarity (RapidFuzz). Drop
-     candidates below `merchant_match_threshold`.
-  4. Take the best-scoring candidate (ties broken by closest amount).
-       - amounts match (within `amount_tolerance`)      -> MATCH
-       - amounts differ                                  -> AMOUNT_MISMATCH (CRITICAL)
-       - dates differ (but within tolerance)              -> noted on the match
-     Either way, the bank row is now claimed and can't be reused.
-  5. No candidate cleared the merchant-similarity bar (garbled OCR is a real
-     failure mode): fall back to amount+date alone, but ONLY if that pins
-     down exactly one unclaimed bank row -- if it's ambiguous, don't guess.
-     A fallback match is still a MATCH, just annotated as low-confidence.
-  6. Still nothing?                                       -> MISSING_IN_BANK
-       - if a *later* receipt would have matched the same, already-claimed
-         bank row, that later receipt is reported as DUPLICATE_RECEIPT
-         instead of a generic miss, since that is the more actionable signal.
-  7. After all receipts are processed, any bank row never claimed is an
-     UNACCOUNTED_CHARGE -- the bank charged money with no receipt on file,
-     which is exactly the kind of thing this tool exists to surface.
-
-Merchant names are fuzzy-matched after stripping store numbers, phone-style
-digit runs, and punctuation (`_normalize_merchant_name`) -- "Starbucks
-Coffee" vs. "STARBUCKS STORE #4521" scores far higher normalized than raw.
+Pure Python/pandas, no OCR or I/O, so it's easy to unit test with
+hand-built fixtures. See `reconcile()` for the matching algorithm.
 """
 
 from __future__ import annotations
@@ -59,10 +27,8 @@ logger = logging.getLogger(__name__)
 
 _SEVERITY_ORDER = {Severity.CRITICAL: 0, Severity.WARNING: 1, Severity.INFO: 2}
 
-# Store numbers ("#4521"), long digit runs (phone/reference numbers embedded
-# in a bank description like "SHELL OIL 57443217908"), and punctuation are
-# noise for name-similarity purposes -- stripping them before fuzzy matching
-# is what lets "Starbucks Coffee" score well against "STARBUCKS STORE #4521".
+# Strips store numbers, phone/reference digit runs, and punctuation before
+# fuzzy matching -- lets "Starbucks Coffee" score well against "STARBUCKS STORE #4521".
 _MERCHANT_NOISE_RE = re.compile(r"#\d+|\bstore\b|\b\d{3,}\b|[^a-z0-9 ]", re.IGNORECASE)
 
 
@@ -80,6 +46,12 @@ def _merchant_similarity(a: str, b: str) -> float:
     return fuzz.token_sort_ratio(normalized_a, normalized_b)
 
 
+def _date_window(receipt: Receipt, settings: Settings) -> tuple:
+    lo = receipt.txn_date - pd.Timedelta(days=settings.date_tolerance_days)
+    hi = receipt.txn_date + pd.Timedelta(days=settings.date_tolerance_days)
+    return (lo.date() if hasattr(lo, "date") else lo, hi.date() if hasattr(hi, "date") else hi)
+
+
 def _find_best_candidate(
     receipt: Receipt,
     bank_df: pd.DataFrame,
@@ -87,10 +59,7 @@ def _find_best_candidate(
     settings: Settings,
 ) -> tuple[pd.Series | None, float]:
     """Return (best matching unclaimed bank row, similarity score) or (None, 0)."""
-    date_lo = receipt.txn_date - pd.Timedelta(days=settings.date_tolerance_days)
-    date_hi = receipt.txn_date + pd.Timedelta(days=settings.date_tolerance_days)
-    date_lo = date_lo.date() if hasattr(date_lo, "date") else date_lo
-    date_hi = date_hi.date() if hasattr(date_hi, "date") else date_hi
+    date_lo, date_hi = _date_window(receipt, settings)
 
     candidates = bank_df[
         (~bank_df["transaction_id"].isin(claimed))
@@ -126,17 +95,9 @@ def _find_amount_date_only_match(
     claimed: set[str],
     settings: Settings,
 ) -> pd.Series | None:
-    """Last-resort match when no candidate cleared the merchant-similarity
-    bar -- garbled OCR on the store name is a common failure mode with real
-    photographed receipts. Only fires when the amount+date window pins down
-    exactly one unclaimed bank row; with two or more candidates tied on
-    amount, guessing which one is right would be worse than surfacing
-    MISSING_IN_BANK for a human to resolve.
-    """
-    date_lo = receipt.txn_date - pd.Timedelta(days=settings.date_tolerance_days)
-    date_hi = receipt.txn_date + pd.Timedelta(days=settings.date_tolerance_days)
-    date_lo = date_lo.date() if hasattr(date_lo, "date") else date_lo
-    date_hi = date_hi.date() if hasattr(date_hi, "date") else date_hi
+    """Fallback for garbled merchant OCR: match on amount+date alone, but only
+    if that pins down exactly one unclaimed bank row -- never guess between ties."""
+    date_lo, date_hi = _date_window(receipt, settings)
 
     candidates = bank_df[
         (~bank_df["transaction_id"].isin(claimed))
@@ -206,15 +167,12 @@ def reconcile(
         low_confidence_match = False
 
         if best is None:
-            # Merchant similarity couldn't clear the bar -- try the
-            # conservative amount+date-only fallback before giving up.
             best = _find_amount_date_only_match(receipt, bank_df, claimed, settings)
             low_confidence_match = best is not None
 
         if best is None:
-            # Was this receipt's transaction already claimed by an earlier,
-            # identical-looking receipt? That's a duplicate submission, not
-            # a plain miss -- much more actionable for the PM to review.
+            # An already-claimed receipt with the same merchant/amount/date
+            # means this one is a duplicate submission, not a plain miss.
             duplicate_of = _find_prior_duplicate(receipt, claimed_by, settings)
             if duplicate_of is not None:
                 result.discrepancies.append(
@@ -299,8 +257,7 @@ def reconcile(
             )
         )
 
-    # Anything on the bank statement nobody claimed is money that moved
-    # with no paper trail -- the clearest fraud/billing-error signal we have.
+    # Bank rows nobody claimed are money that moved with no paper trail.
     for row in bank_df.itertuples(index=False):
         if row.transaction_id in claimed:
             continue

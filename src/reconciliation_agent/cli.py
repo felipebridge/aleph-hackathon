@@ -17,6 +17,7 @@ from .matcher import reconcile
 from .models import Receipt
 from .ocr_engine import SUPPORTED_EXTENSIONS, OcrEngineError, get_ocr_engine
 from .report import render_terminal, write_text_report
+from .report_html import write_html_report
 
 logger = logging.getLogger("reconciliation_agent")
 
@@ -79,6 +80,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "Unmatched bank charges at/above this amount are CRITICAL "
             "instead of WARNING (default: 200)"
         ),
+    )
+    parser.add_argument(
+        "--output-html",
+        type=Path,
+        default=None,
+        help="Optional path to write a self-contained HTML report (e.g. reports/report.html)",
     )
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable debug logging")
     return parser
@@ -149,6 +156,10 @@ def run(settings: Settings) -> int:
     report_path = write_text_report(result, settings.output_path)
     console.print(f"\n[dim]Full report written to {report_path}[/dim]")
 
+    if settings.output_html is not None:
+        html_path = write_html_report(result, settings.output_html)
+        console.print(f"[dim]HTML report written to {html_path}[/dim]")
+
     # Exit non-zero when critical issues are found -- lets this slot into a
     # CI/cron job that alerts on `echo $?` without parsing the report text.
     return 2 if result.critical_count else 0
@@ -163,6 +174,7 @@ def main(argv: list[str] | None = None) -> int:
         receipts_dir=args.receipts_dir,
         bank_csv=args.bank_csv,
         output_path=args.output,
+        output_html=args.output_html,
         date_tolerance_days=args.date_tolerance_days,
         amount_tolerance=args.amount_tolerance,
         merchant_match_threshold=args.merchant_threshold,

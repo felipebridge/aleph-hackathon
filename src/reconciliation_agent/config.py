@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Optional
 
 
 @dataclass(frozen=True, slots=True)
@@ -13,6 +14,8 @@ class Settings:
     receipts_dir: Path
     bank_csv: Path
     output_path: Path
+
+    output_html: Optional[Path] = None
 
     date_tolerance_days: int = 3  # bank posting can lag the receipt date by this many days
     amount_tolerance: float = 0.01  # $ tolerance for rounding noise

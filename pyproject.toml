@@ -49,3 +49,4 @@ select = ["E", "F", "I", "UP", "B", "BLE", "C4", "DTZ", "RUF"]
 # Inline CSS/HTML template lines read better as one declaration per line
 # than wrapped mid-property to fit 100 chars.
 "src/reconciliation_agent/report_html.py" = ["E501"]
+"src/reconciliation_agent/webapp.py" = ["E501"]

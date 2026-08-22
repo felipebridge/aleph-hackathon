@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
+
+_MONTH_RE = re.compile(r"^\d{4}-\d{2}$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -15,6 +18,8 @@ class Settings:
     output_path: Path
 
     output_html: Path | None = None  # override the default <output_path>.html location
+    whatsapp_month: str | None = None  # "YYYY-MM": reconcile the WhatsApp intake dataset instead
+    # of --receipts-dir (already-OCR'd at ingestion time, see monthly_dataset.py)
 
     date_tolerance_days: int = 3  # bank posting can lag the receipt date by this many days
     amount_tolerance: float = 0.01  # $ tolerance for rounding noise
@@ -30,3 +35,7 @@ class Settings:
             raise ValueError("amount_tolerance must be >= 0")
         if not (0 <= self.merchant_match_threshold <= 100):
             raise ValueError("merchant_match_threshold must be within [0, 100]")
+        if self.whatsapp_month is not None and not _MONTH_RE.match(self.whatsapp_month):
+            raise ValueError(
+                f"whatsapp_month must look like 'YYYY-MM', got {self.whatsapp_month!r}"
+            )

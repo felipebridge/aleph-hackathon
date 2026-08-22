@@ -10,6 +10,7 @@ from pathlib import Path
 from rich.console import Console
 from rich.logging import RichHandler
 
+from . import monthly_dataset
 from .bank_loader import BankStatementError, load_bank_statement
 from .config import Settings
 from .extractor import parse_receipt
@@ -82,6 +83,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--whatsapp-month",
+        default=None,
+        help=(
+            "Reconcile the WhatsApp intake dataset for this month (YYYY-MM) "
+            "instead of --receipts-dir -- see scripts/simulate_whatsapp_traffic.py"
+        ),
+    )
+    parser.add_argument(
         "--output-html",
         type=Path,
         default=None,
@@ -102,7 +111,7 @@ def _configure_logging(verbose: bool) -> None:
     )
 
 
-def _discover_receipt_files(receipts_dir: Path) -> list[Path]:
+def discover_receipt_files(receipts_dir: Path) -> list[Path]:
     if not receipts_dir.exists():
         raise FileNotFoundError(f"Receipts directory not found: {receipts_dir}")
     files = sorted(
@@ -115,7 +124,7 @@ def _discover_receipt_files(receipts_dir: Path) -> list[Path]:
 
 def load_receipts(receipts_dir: Path, console: Console) -> list[Receipt]:
     """Run QVAC OCR + extraction over every receipt file in the directory."""
-    files = _discover_receipt_files(receipts_dir)
+    files = discover_receipt_files(receipts_dir)
     if not files:
         console.print(f"[yellow]No receipt files found in {receipts_dir}[/yellow]")
         return []
@@ -141,11 +150,18 @@ def run(settings: Settings) -> int:
     """Execute the full pipeline. Returns a process exit code."""
     console = Console()
 
-    try:
-        receipts = load_receipts(settings.receipts_dir, console)
-    except (FileNotFoundError, OcrEngineError) as exc:
-        console.print(f"[bold red]Error:[/bold red] {exc}")
-        return 1
+    if settings.whatsapp_month is not None:
+        receipts = monthly_dataset.load(settings.whatsapp_month)
+        console.print(
+            f"[dim]WhatsApp intake dataset: {settings.whatsapp_month}[/dim] "
+            f"({len(receipts)} receipt(s), already OCR'd at ingestion time)\n"
+        )
+    else:
+        try:
+            receipts = load_receipts(settings.receipts_dir, console)
+        except (FileNotFoundError, OcrEngineError) as exc:
+            console.print(f"[bold red]Error:[/bold red] {exc}")
+            return 1
 
     try:
         bank_df = load_bank_statement(settings.bank_csv)
@@ -177,6 +193,7 @@ def main(argv: list[str] | None = None) -> int:
         bank_csv=args.bank_csv,
         output_path=args.output,
         output_html=args.output_html,
+        whatsapp_month=args.whatsapp_month,
         date_tolerance_days=args.date_tolerance_days,
         amount_tolerance=args.amount_tolerance,
         merchant_match_threshold=args.merchant_threshold,

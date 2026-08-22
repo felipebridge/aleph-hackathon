@@ -23,6 +23,10 @@ reports/*.txt
 reports/*.html
 !reports/.gitkeep
 
+# WhatsApp intake dataset -- accumulates at runtime, regenerate with
+# scripts/simulate_whatsapp_traffic.py or a real webhook, not a static asset
+data/whatsapp_intake/
+
 # Local secrets / SDK caches (QVAC models are downloaded locally at runtime)
 .qvac_cache/
 *.env

@@ -17,3 +17,17 @@ Pillow>=10.3,<11.0
 # PDF rasterization (bundles the PDFium renderer as a native wheel --
 # no system Poppler/PDF binary needed, stays 100% local).
 pypdfium2>=4.30,<6.0
+
+# --- WhatsApp Business Cloud API ingestion (transport only, not inference) ---
+# The only outbound network calls anywhere in this project live in
+# src/reconciliation_agent/whatsapp/media_client.py, and only talk to
+# Meta's Graph API to fetch a message attachment a customer sent. Nothing
+# here does AI inference -- the file still gets OCR'd 100% locally via
+# QVAC once it lands on disk. See README "Arquitectura híbrida".
+fastapi>=0.115,<1.0
+uvicorn>=0.30,<1.0
+httpx>=0.27,<1.0
+python-multipart>=0.0.9,<1.0
+
+# --- Local web UI (reuses the FastAPI dep above; no network calls) ---
+# main_web.py -- served entirely on localhost, no external assets/CDN.

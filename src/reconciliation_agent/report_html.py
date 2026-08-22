@@ -69,6 +69,9 @@ tr:last-child td { border-bottom: none; }
 .matched-table td { color: #2e7d52; }
 .matched-table tr:nth-child(even) { background: #f9fef9; }
 footer { text-align: center; font-size: 0.75rem; color: #aab7b8; margin-top: 16px; }
+.nav-back { display: inline-block; margin-bottom: 16px; color: #2980b9;
+            text-decoration: none; font-size: 0.85rem; font-weight: 600; }
+.nav-back:hover { text-decoration: underline; }
 """
 
 
@@ -84,7 +87,10 @@ def _sev_badge(severity: Severity) -> str:
 def render_html_report(
     result: ReconciliationResult,
     generated_at: dt.datetime | None = None,
+    nav_html: str = "",
 ) -> str:
+    """`nav_html` lets an embedding web UI (webapp.py) inject a "back" link
+    above the report without this module knowing anything about that UI."""
     generated_at = generated_at or dt.datetime.now().astimezone()
     ts = generated_at.strftime("%Y-%m-%d %H:%M:%S")
 
@@ -162,6 +168,7 @@ def render_html_report(
 </head>
 <body>
 <div class="container">
+  {nav_html}
   <header>
     <h1>Financial Reconciliation Report
       <span class="badge">100% offline</span>

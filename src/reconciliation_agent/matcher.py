@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import re
+from datetime import timedelta
 
 import pandas as pd
 from rapidfuzz import fuzz
@@ -47,9 +48,9 @@ def _merchant_similarity(a: str, b: str) -> float:
 
 
 def _date_window(receipt: Receipt, settings: Settings) -> tuple:
-    lo = receipt.txn_date - pd.Timedelta(days=settings.date_tolerance_days)
-    hi = receipt.txn_date + pd.Timedelta(days=settings.date_tolerance_days)
-    return (lo.date() if hasattr(lo, "date") else lo, hi.date() if hasattr(hi, "date") else hi)
+    lo = receipt.txn_date - timedelta(days=settings.date_tolerance_days)
+    hi = receipt.txn_date + timedelta(days=settings.date_tolerance_days)
+    return lo, hi
 
 
 def _find_best_candidate(

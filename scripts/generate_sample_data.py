@@ -4,7 +4,7 @@ under data/receipts/ (a rendered PNG plus a ground-truth .ocr.txt sidecar
 each), covering every discrepancy type the matcher detects. See README.md
 section 9 for what each scenario exercises.
 """
-
+ 
 from __future__ import annotations
 
 import csv

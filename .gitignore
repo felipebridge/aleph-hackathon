@@ -12,13 +12,15 @@ dist/
 venv/
 env/
 
-# Testing / coverage
+# Testing / coverage / linting
 .pytest_cache/
+.ruff_cache/
 .coverage
 htmlcov/
 
 # Reports generated at runtime (keep the folder, ignore the contents)
 reports/*.txt
+reports/*.html
 !reports/.gitkeep
 
 # Local secrets / SDK caches (QVAC models are downloaded locally at runtime)

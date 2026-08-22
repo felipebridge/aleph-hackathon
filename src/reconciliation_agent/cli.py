@@ -17,6 +17,7 @@ from .matcher import reconcile
 from .models import Receipt
 from .ocr_engine import SUPPORTED_EXTENSIONS, OcrEngineError, get_ocr_engine
 from .report import render_terminal, write_text_report
+from .report_html import write_html_report
 
 logger = logging.getLogger("reconciliation_agent")
 
@@ -147,7 +148,8 @@ def run(settings: Settings) -> int:
 
     render_terminal(result, console=console)
     report_path = write_text_report(result, settings.output_path)
-    console.print(f"\n[dim]Full report written to {report_path}[/dim]")
+    html_path = write_html_report(result, settings.output_path.with_suffix(".html"))
+    console.print(f"\n[dim]Full report written to {report_path} and {html_path}[/dim]")
 
     # Exit non-zero when critical issues are found -- lets this slot into a
     # CI/cron job that alerts on `echo $?` without parsing the report text.

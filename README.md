@@ -27,7 +27,7 @@ data/receipts/*.png,*.jpg,*.pdf         data/bank_statement.csv
                                  ┌───────────────┐
                                  │    Reporte    │
                                  │ (terminal +   │
-                                 │  archivo .txt)│
+                                 │  .txt + .html)│
                                  └───────────────┘
 ```
 
@@ -57,7 +57,7 @@ python scripts/generate_sample_data.py
 python main.py
 ```
 
-`main.py` lee `data/receipts/`, hace OCR real de cada imagen con el modelo de visión de QVAC corriendo en el propio dispositivo, cruza esa información contra `data/bank_statement.csv`, imprime un reporte de discrepancias con colores en la terminal, y escribe el mismo reporte en `reports/reconciliation_report.txt`. Si el worker no está instalado o no arranca, el programa **falla con un mensaje explicando cómo instalarlo** — no hay ningún modo silencioso que finja hacer inferencia sin QVAC corriendo.
+`main.py` lee `data/receipts/`, hace OCR real de cada imagen con el modelo de visión de QVAC corriendo en el propio dispositivo, cruza esa información contra `data/bank_statement.csv`, imprime un reporte de discrepancias con colores en la terminal, y escribe el mismo reporte en `reports/reconciliation_report.txt` **y** `reports/reconciliation_report.html` (autocontenido, sin dependencias externas, para abrir en el navegador o adjuntar por mail). Si el worker no está instalado o no arranca, el programa **falla con un mensaje explicando cómo instalarlo** — no hay ningún modo silencioso que finja hacer inferencia sin QVAC corriendo.
 
 Ejemplo de salida:
 
@@ -149,13 +149,14 @@ Todos los umbrales viven en [`config.py`](src/reconciliation_agent/config.py) co
 │   ├── bank_loader.py                # CSV del banco -> DataFrame de pandas normalizado
 │   ├── matcher.py                    # la lógica de negocio de la reconciliación
 │   ├── report.py                     # reporte en terminal (rich) + archivo .txt
+│   ├── report_html.py                # reporte .html autocontenido
 │   └── cli.py                        # orquesta el pipeline, argparse
 ├── scripts/generate_sample_data.py   # genera el dataset de demo
 ├── data/
 │   ├── bank_statement.csv            # extracto bancario simulado
 │   └── receipts/                     # 8 imágenes de recibo sintéticas (sin texto pre-cargado)
-├── tests/                            # tests unitarios de pytest (extractor/matcher/banco/OCR)
-└── reports/                          # ahí caen los reportes .txt generados
+├── tests/                            # tests unitarios de pytest
+└── reports/                          # ahí caen los reportes .txt/.html generados
 ```
 
 ## 8. Cómo correr los tests
@@ -165,7 +166,7 @@ pip install -r requirements-dev.txt
 pytest
 ```
 
-Los tests cubren las heurísticas de extracción, el loader/validación del CSV bancario, toda la matriz de reglas de negocio del matcher (match limpio, discrepancia de monto, faltante en el banco, recibo duplicado, cargo sin comprobante, tolerancia de fecha) y la abstracción del motor OCR — todo contra fixtures armadas a mano, sin necesitar I/O ni el SDK.
+Los tests cubren las heurísticas de extracción (incluyendo montos ARS/AFIP), el loader/validación del CSV bancario, toda la matriz de reglas de negocio del matcher (match limpio, discrepancia de monto, faltante en el banco, recibo duplicado, cargo sin comprobante, tolerancia de fecha), la abstracción del motor OCR, y los reportes .txt/.html — todo contra fixtures armadas a mano, sin necesitar I/O ni el SDK.
 
 ## 9. Dataset de demo
 

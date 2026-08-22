@@ -82,7 +82,7 @@ Esto es más fuerte que mostrar un run perfecto — es la prueba de que el agent
 cat reports/reconciliation_report.txt
 ```
 
-> "Y todo esto queda además en un .txt plano — pensado para adjuntar a un mail o archivar como evidencia de auditoría."
+> "Y todo esto queda además en un .txt plano y un .html autocontenido — pensado para adjuntar a un mail o archivar como evidencia de auditoría."
 
 ---
 

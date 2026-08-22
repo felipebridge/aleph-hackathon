@@ -17,6 +17,18 @@ from .models import OcrResult, Receipt
 
 logger = logging.getLogger(__name__)
 
+# Some vision-OCR models annotate output with layout markup (a bounding-box
+# prefix per line, <table> tags around tabular content) instead of plain
+# text. Strip it before running the regex heuristics below.
+_LAYOUT_PREFIX_RE = re.compile(r"^(?:text|table)\s*\[\d+,\s*\d+,\s*\d+,\s*\d+\]\s*", re.IGNORECASE)
+_TABLE_TAG_RE = re.compile(r"</?table>", re.IGNORECASE)
+
+
+def _strip_layout_markup(text: str) -> str:
+    lines = [_TABLE_TAG_RE.sub(" ", _LAYOUT_PREFIX_RE.sub("", line)) for line in text.splitlines()]
+    return "\n".join(lines)
+
+
 # --- Amount extraction -------------------------------------------------
 
 # Matches currency amounts with cents, e.g. $1,234.56 / 1234.56 / $45.99 /
@@ -169,7 +181,10 @@ _MERCHANT_SEARCH_WINDOW = 6
 
 def _merchant_candidate_score(line: str, position: int) -> float:
     """Higher = more likely the store name. Penalizes address/phone lines
-    (leading digits, high digit ratio), the most common false positive."""
+    (leading digits, high digit ratio) and full-sentence lines -- some
+    vision-OCR models occasionally leak a meta-commentary sentence (e.g.
+    "There is no actual character output to extract.") instead of, or
+    alongside, the real transcription; a store name is never a sentence."""
     score = 100.0 - position * 5
     if _LEADING_DIGITS_RE.match(line):
         score -= 60
@@ -177,6 +192,8 @@ def _merchant_candidate_score(line: str, position: int) -> float:
     score -= digit_ratio * 80
     if not (2 <= len(line) <= 50):
         score -= 30
+    if line.rstrip()[-1:] in ".!?" and len(line.split()) >= 4:
+        score -= 60
     return score
 
 
@@ -206,7 +223,7 @@ def extract_merchant(text: str) -> str | None:
 
 def parse_receipt(ocr_result: OcrResult, source_file: Path) -> Receipt:
     """Build a structured :class:`Receipt` from a raw OCR result."""
-    text = ocr_result.text
+    text = _strip_layout_markup(ocr_result.text)
     merchant = extract_merchant(text)
     amount = extract_amount(text)
     txn_date = extract_date(text)

@@ -1,9 +1,0 @@
-Amazon Web Services
-Invoice
---------------------------------
-EC2 Compute Usage           64.00
-S3 Storage                  25.00
---------------------------------
-TOTAL                      $89.00
-08/09/2026
-Billing Support: aws.amazon.com/support

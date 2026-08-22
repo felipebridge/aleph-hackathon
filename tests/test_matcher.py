@@ -40,7 +40,7 @@ def make_receipt(merchant: str, amount: float, txn_date: dt.date, filename: str 
         amount=amount,
         txn_date=txn_date,
         raw_text="",
-        ocr_engine="mock",
+        ocr_engine="qvac",
     )
 
 

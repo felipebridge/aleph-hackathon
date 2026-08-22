@@ -14,8 +14,6 @@ class Settings:
     bank_csv: Path
     output_path: Path
 
-    ocr_engine: str = "auto"  # "auto" | "qvac" | "tesseract" | "mock"
-
     date_tolerance_days: int = 3  # bank posting can lag the receipt date by this many days
     amount_tolerance: float = 0.01  # $ tolerance for rounding noise
     merchant_match_threshold: float = 60.0  # min RapidFuzz score (0-100) to be a candidate

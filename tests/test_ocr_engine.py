@@ -1,4 +1,4 @@
-"""Unit tests for the OCR engine abstraction and its deterministic mock."""
+"""Unit tests for the QVAC OCR engine and its PDF rasterization support."""
 
 from __future__ import annotations
 
@@ -9,53 +9,26 @@ from PIL import Image
 
 from reconciliation_agent.ocr_engine import (
     OcrEngineError,
-    SidecarMockEngine,
-    TesseractOCREngine,
+    QVACOcrEngine,
     _resolve_attachment_paths,
     get_ocr_engine,
 )
 
 
-def test_sidecar_mock_engine_reads_companion_text_file(tmp_path: Path):
-    image = tmp_path / "receipt.png"
-    image.write_bytes(b"not a real image, contents are irrelevant")
-    sidecar = tmp_path / "receipt.png.ocr.txt"
-    sidecar.write_text("Starbucks Coffee\nTOTAL $4.75\n", encoding="utf-8")
-
-    engine = SidecarMockEngine()
-    result = engine.read(image)
-
-    assert result.engine_name == "mock"
-    assert "Starbucks Coffee" in result.text
-    assert result.confidence == 1.0
+def test_get_ocr_engine_returns_ready_instance_when_available(monkeypatch):
+    monkeypatch.setattr(QVACOcrEngine, "is_available", lambda self: True)
+    engine = get_ocr_engine()
+    assert isinstance(engine, QVACOcrEngine)
 
 
-def test_sidecar_mock_engine_raises_when_sidecar_missing(tmp_path: Path):
-    image = tmp_path / "receipt.png"
-    image.write_bytes(b"irrelevant")
-
-    engine = SidecarMockEngine()
-    with pytest.raises(OcrEngineError):
-        engine.read(image)
-
-
-def test_get_ocr_engine_mock_is_always_available():
-    engine = get_ocr_engine("mock")
-    assert engine.name == "mock"
-
-
-def test_get_ocr_engine_rejects_unknown_name():
-    with pytest.raises(ValueError):
-        get_ocr_engine("not-a-real-engine")
-
-
-def test_get_ocr_engine_auto_always_resolves_to_something():
-    engine = get_ocr_engine("auto")
-    assert engine.name in {"qvac", "tesseract", "mock"}
+def test_get_ocr_engine_raises_with_setup_instructions_when_unavailable(monkeypatch):
+    monkeypatch.setattr(QVACOcrEngine, "is_available", lambda self: False)
+    with pytest.raises(OcrEngineError, match="QVAC worker not found"):
+        get_ocr_engine()
 
 
 class TestPdfRasterization:
-    """Covers the shared pypdfium2 rasterization path used by both engines."""
+    """Covers the pypdfium2 rasterization path QVACOcrEngine sends as attachments."""
 
     def test_plain_image_passes_through_unchanged(self, tmp_path: Path):
         image_path = tmp_path / "receipt.png"
@@ -84,29 +57,3 @@ class TestPdfRasterization:
         with _resolve_attachment_paths(pdf_path) as paths:
             assert len(paths) == 2
             assert all(p.exists() for p in paths)
-
-
-class TestTesseractPdfSupport:
-    def test_reads_multi_page_pdf_and_merges_page_text(self, tmp_path: Path, monkeypatch):
-        import pytesseract
-
-        pdf_path = tmp_path / "invoice.pdf"
-        page1 = Image.new("RGB", (200, 100), "white")
-        page2 = Image.new("RGB", (200, 100), "white")
-        page1.save(pdf_path, save_all=True, append_images=[page2])
-
-        seen_sizes = []
-
-        def fake_image_to_string(img):
-            seen_sizes.append(img.size)
-            return f"page {len(seen_sizes)} text"
-
-        # Stub the binary call -- only rasterization + page-merge is under test.
-        monkeypatch.setattr(pytesseract, "image_to_string", fake_image_to_string)
-
-        result = TesseractOCREngine().read(pdf_path)
-
-        assert len(seen_sizes) == 2  # one call per rasterized page
-        assert "page 1 text" in result.text
-        assert "page 2 text" in result.text
-        assert result.engine_name == "tesseract"

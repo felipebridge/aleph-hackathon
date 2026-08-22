@@ -6,18 +6,14 @@ rapidfuzz>=3.9,<4.0
 # --- Terminal reporting UI ---
 rich>=13.7,<14.0
 
-# --- Local / offline OCR ---
-# Primary engine: Tether's local inference SDK. The client spawns/attaches to a
-# local worker process over RPC -- no network calls, models run entirely
-# on-device. If the worker binary isn't available in a given environment, the
-# agent transparently falls back to the Tesseract engine below, so the
-# pipeline is never blocked on this dependency during the demo.
+# --- Local / offline AI inference (required) ---
+# The client spawns/attaches to a local QVAC worker process over RPC --
+# no network calls, models run entirely on-device. This is the ONLY
+# inference layer this project uses; there is no fallback to any other
+# model provider, local or cloud.
 tetherto-qvac-sdk>=0.17,<1.0
-
-# Offline fallback OCR engine (also 100% local — requires the `tesseract` binary on PATH).
-pytesseract>=0.3.10,<0.4.0
 Pillow>=10.3,<11.0
 
-# PDF rasterization for both OCR engines (bundles the PDFium renderer as a
-# native wheel — no system Poppler/PDF binary needed, stays 100% local).
+# PDF rasterization (bundles the PDFium renderer as a native wheel --
+# no system Poppler/PDF binary needed, stays 100% local).
 pypdfium2>=4.30,<6.0

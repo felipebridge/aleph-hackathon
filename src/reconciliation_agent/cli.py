@@ -51,15 +51,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
-        "--ocr-engine",
-        choices=["auto", "qvac", "tesseract", "mock"],
-        default="auto",
-        help=(
-            "OCR backend to use. 'auto' tries the local QVAC SDK first and "
-            "falls back to Tesseract, then a deterministic mock (default: auto)."
-        ),
-    )
-    parser.add_argument(
         "--date-tolerance-days",
         type=int,
         default=3,
@@ -112,14 +103,14 @@ def _discover_receipt_files(receipts_dir: Path) -> list[Path]:
     return files
 
 
-def load_receipts(receipts_dir: Path, ocr_engine_name: str, console: Console) -> list[Receipt]:
-    """Run OCR + extraction over every receipt file in the directory."""
+def load_receipts(receipts_dir: Path, console: Console) -> list[Receipt]:
+    """Run QVAC OCR + extraction over every receipt file in the directory."""
     files = _discover_receipt_files(receipts_dir)
     if not files:
         console.print(f"[yellow]No receipt files found in {receipts_dir}[/yellow]")
         return []
 
-    engine = get_ocr_engine(ocr_engine_name)
+    engine = get_ocr_engine()
     console.print(f"[dim]OCR engine: {engine.name}[/dim] ({len(files)} receipt file(s))\n")
 
     receipts: list[Receipt] = []
@@ -132,10 +123,7 @@ def load_receipts(receipts_dir: Path, ocr_engine_name: str, console: Console) ->
                 continue
             receipts.append(parse_receipt(ocr_result, path))
     finally:
-        # QVAC owns a background worker/model and needs releasing; others don't.
-        close = getattr(engine, "close", None)
-        if close is not None:
-            close()
+        engine.close()
     return receipts
 
 
@@ -144,7 +132,7 @@ def run(settings: Settings) -> int:
     console = Console()
 
     try:
-        receipts = load_receipts(settings.receipts_dir, settings.ocr_engine, console)
+        receipts = load_receipts(settings.receipts_dir, console)
     except (FileNotFoundError, OcrEngineError) as exc:
         console.print(f"[bold red]Error:[/bold red] {exc}")
         return 1
@@ -175,7 +163,6 @@ def main(argv: list[str] | None = None) -> int:
         receipts_dir=args.receipts_dir,
         bank_csv=args.bank_csv,
         output_path=args.output,
-        ocr_engine=args.ocr_engine,
         date_tolerance_days=args.date_tolerance_days,
         amount_tolerance=args.amount_tolerance,
         merchant_match_threshold=args.merchant_threshold,

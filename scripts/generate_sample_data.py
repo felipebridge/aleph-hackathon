@@ -1,10 +1,11 @@
 #!/usr/bin/env python
-"""Generates the demo dataset: data/bank_statement.csv + 8 sample receipts
-under data/receipts/ (a rendered PNG plus a ground-truth .ocr.txt sidecar
-each), covering every discrepancy type the matcher detects. See README.md
-section 9 for what each scenario exercises.
+"""Generates the demo dataset: data/bank_statement.csv + 8 sample receipt
+images under data/receipts/, covering every discrepancy type the matcher
+detects. See README.md section 9 for what each scenario exercises. QVAC
+does the actual OCR on these images at run time -- no pre-baked ground
+truth text is shipped anywhere in this repo.
 """
- 
+
 from __future__ import annotations
 
 import csv
@@ -199,12 +200,6 @@ def render_receipt_image(scenario: ReceiptScenario, out_dir: Path) -> Path:
     return out_path
 
 
-def write_ocr_sidecar(scenario: ReceiptScenario, image_path: Path) -> Path:
-    sidecar_path = image_path.with_suffix(image_path.suffix + ".ocr.txt")
-    sidecar_path.write_text("\n".join(scenario.lines) + "\n", encoding="utf-8")
-    return sidecar_path
-
-
 def write_bank_statement(out_path: Path) -> Path:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with out_path.open("w", newline="", encoding="utf-8") as f:
@@ -222,8 +217,7 @@ def main() -> None:
 
     for scenario in RECEIPT_SCENARIOS:
         image_path = render_receipt_image(scenario, RECEIPTS_DIR)
-        sidecar_path = write_ocr_sidecar(scenario, image_path)
-        print(f"Wrote {image_path.relative_to(ROOT)} + {sidecar_path.name}")
+        print(f"Wrote {image_path.relative_to(ROOT)}")
 
     print(f"\nDone. {len(RECEIPT_SCENARIOS)} sample receipts in {RECEIPTS_DIR}")
 

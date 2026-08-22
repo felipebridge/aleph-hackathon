@@ -1,13 +1,13 @@
-"""Local OCR engines -- the only module allowed to touch the QVAC SDK.
+"""QVAC-backed local OCR. This is the only module that touches the SDK.
 
-Everything else talks to :class:`BaseOCREngine`, not the SDK directly, so
-swapping engines never touches business logic. Every engine here runs
-100% locally -- no network calls anywhere in this file.
+Everything else talks to :class:`OcrResult`, not the SDK directly, so the
+business logic never depends on how the pixels turned into text. Inference
+runs entirely on-device via QVAC's local worker process -- no cloud calls,
+no other model provider anywhere in this file.
 """
 
 from __future__ import annotations
 
-import abc
 import asyncio
 import contextlib
 import logging
@@ -26,7 +26,7 @@ _PDF_RENDER_SCALE = 2.0  # ~144 DPI: good OCR accuracy/speed tradeoff for printe
 
 
 class OcrEngineError(RuntimeError):
-    """Raised when no OCR engine could process a given file."""
+    """Raised when the QVAC engine could not process a given file."""
 
 
 def _render_pdf_pages(file_path: Path):
@@ -63,28 +63,14 @@ def _resolve_attachment_paths(file_path: Path):
         yield page_paths
 
 
-class BaseOCREngine(abc.ABC):
-    """Common interface every OCR backend must implement."""
-
-    name: str = "base"
-
-    @abc.abstractmethod
-    def is_available(self) -> bool:
-        """Cheap check: can this engine actually run on this machine?"""
-
-    @abc.abstractmethod
-    def read(self, file_path: Path) -> OcrResult:
-        """Run OCR on a single receipt file and return the raw text."""
-
-
-class QVACOcrEngine(BaseOCREngine):
+class QVACOcrEngine:
     """Offline OCR + NLP via Tether's local `tetherto-qvac-sdk`.
 
     The SDK's client spawns a local worker process and talks RPC to it --
     no network socket involved. Its public surface is a general LLM client
     (`Client`, `load_model`, `completion`), not a dedicated `run_ocr()`, so
-    OCR happens by loading a small on-device vision model and sending the
-    receipt image as a chat attachment alongside a transcription prompt.
+    OCR happens by loading an on-device vision model and sending the receipt
+    image as a chat attachment alongside a transcription prompt.
 
     The SDK is async; the rest of this CLI isn't. Rather than dragging
     asyncio through every module, this class runs a background event-loop
@@ -93,18 +79,21 @@ class QVACOcrEngine(BaseOCREngine):
     """
 
     name = "qvac"
-    DEFAULT_MODEL_SRC = "SMOLVLM2_500M_MULTIMODAL_Q8_0"  # override via model_src=...
+    DEFAULT_MODEL_SRC = "OCR_3B_MULTIMODAL_Q4_0"  # override via model_src=...
     # Vision models need a paired "projection" model to actually read images;
     # without it the worker rejects attachments with "Media not supported by
     # text-only models". Only auto-paired when using the default model above.
-    DEFAULT_PROJECTION_MODEL_SRC = "MMPROJ_SMOLVLM2_500M_MULTIMODAL_Q8_0"
+    DEFAULT_PROJECTION_MODEL_SRC = "MMPROJ_OCR_3B_MULTIMODAL_Q8_0"
 
+    # Deliberately minimal: this OCR-specialized model is sensitive to extra
+    # phrasing. Adding "store name, items, subtotal, TOTAL..." hints, or a
+    # "plain text only, no bounding boxes" instruction, both made it return
+    # an empty completion instead of transcribing anything -- tested against
+    # the real worker, not guessed. It already outputs its own layout markup
+    # (bounding boxes, <table> tags) unprompted; extractor.py strips that.
     OCR_PROMPT = (
-        "You are a receipt-scanning OCR engine. Transcribe every line of "
-        "text visible in this receipt image exactly as printed -- store "
-        "name, items, subtotal, tax, and the final TOTAL amount -- "
-        "preserving line breaks. Output only the transcribed text, "
-        "nothing else, no commentary."
+        "Transcribe every line of text visible in this receipt image "
+        "exactly as printed, preserving line breaks."
     )
 
     def __init__(self, model_src: Any = None) -> None:
@@ -200,94 +189,16 @@ class QVACOcrEngine(BaseOCREngine):
         try:
             return self._run(self._read_async(file_path))
         except Exception as exc:  # converted to a domain-specific OcrEngineError below
-            raise OcrEngineError(
-                f"QVAC OCR failed for {file_path.name}: {exc}. Install with "
-                "`pip install tetherto-qvac-sdk` and ensure its local worker "
-                "binary is available, or select a fallback engine with "
-                "--ocr-engine tesseract|mock."
-            ) from exc
+            raise OcrEngineError(f"QVAC OCR failed for {file_path.name}: {exc}") from exc
 
 
-class TesseractOCREngine(BaseOCREngine):
-    """Fallback OCR using the local Tesseract binary via pytesseract."""
-
-    name = "tesseract"
-
-    def is_available(self) -> bool:
-        try:
-            import pytesseract
-            from PIL import Image  # noqa: F401 -- import-tested, not used directly here
-
-            pytesseract.get_tesseract_version()
-            return True
-        except Exception:  # noqa: BLE001 -- best-effort availability probe, any failure means "no"
-            return False
-
-    def read(self, file_path: Path) -> OcrResult:
-        import pytesseract
-        from PIL import Image
-
-        # A PDF is rasterized to one image per page (via pypdfium2, still
-        # fully local/offline) and OCR'd page by page; a plain image is
-        # OCR'd directly. Either way the result is one merged text block.
-        with _resolve_attachment_paths(file_path) as page_paths:
-            page_texts = []
-            for page_path in page_paths:
-                with Image.open(page_path) as img:
-                    page_texts.append(pytesseract.image_to_string(img))
-
-        text = "\n\n".join(page_texts)
-        return OcrResult(text=text, engine_name=self.name, confidence=0.85)
-
-
-class SidecarMockEngine(BaseOCREngine):
-    """Reads a `<receipt>.ocr.txt` sidecar instead of doing real OCR -- keeps the
-    pipeline demoable without Tesseract or a QVAC worker installed."""
-
-    name = "mock"
-
-    def is_available(self) -> bool:
-        return True
-
-    def read(self, file_path: Path) -> OcrResult:
-        sidecar = file_path.with_suffix(file_path.suffix + ".ocr.txt")
-        if not sidecar.exists():
-            raise OcrEngineError(
-                f"No mock OCR sidecar found for {file_path.name} "
-                f"(expected {sidecar.name}). Run "
-                "`python scripts/generate_sample_data.py` or choose a real "
-                "OCR engine with --ocr-engine tesseract."
-            )
-        text = sidecar.read_text(encoding="utf-8")
-        return OcrResult(text=text, engine_name=self.name, confidence=1.0)
-
-
-_ENGINES: dict[str, type[BaseOCREngine]] = {
-    "qvac": QVACOcrEngine,
-    "tesseract": TesseractOCREngine,
-    "mock": SidecarMockEngine,
-}
-
-
-def get_ocr_engine(name: str = "auto") -> BaseOCREngine:
-    """Resolve an engine name to a ready instance. "auto" degrades QVAC -> Tesseract -> mock."""
-    if name != "auto":
-        cls = _ENGINES.get(name)
-        if cls is None:
-            raise ValueError(
-                f"Unknown OCR engine '{name}'. Choose from: auto, {', '.join(_ENGINES)}"
-            )
-        engine = cls()
-        if not engine.is_available():
-            raise OcrEngineError(f"Requested OCR engine '{name}' is not available on this machine.")
-        return engine
-
-    for engine_name in ("qvac", "tesseract", "mock"):
-        engine = _ENGINES[engine_name]()
-        if engine.is_available():
-            logger.info("Using OCR engine: %s", engine_name)
-            return engine
-
-    # SidecarMockEngine.is_available() always returns True, so this branch
-    # is unreachable in practice -- kept as an explicit, honest failure mode.
-    raise OcrEngineError("No OCR engine available (not even the mock fallback).")
+def get_ocr_engine() -> QVACOcrEngine:
+    """Construct the QVAC engine; fails loudly (never silently) if the local worker isn't set up."""
+    engine = QVACOcrEngine()
+    if not engine.is_available():
+        raise OcrEngineError(
+            "QVAC worker not found. Install it with `npm install -g @qvac/sdk@0.17.1`, "
+            "set QVAC_SDK_DIR to the installed package directory, and see "
+            "https://docs.qvac.tether.io/system-requirements/ for supported platforms."
+        )
+    return engine

@@ -6,12 +6,31 @@ import datetime as dt
 from pathlib import Path
 
 from reconciliation_agent.extractor import (
+    _strip_layout_markup,
     extract_amount,
     extract_date,
     extract_merchant,
     parse_receipt,
 )
 from reconciliation_agent.models import OcrResult
+
+# Captured verbatim from a real QVAC OCR_3B_MULTIMODAL_Q4_0 run against
+# 01_starbucks.png: bounding-box prefixes, <table> tags around line items,
+# a duplicated/hallucinated $0.00 TOTAL line before the real one, and a
+# leaked self-critique sentence the model was never asked for.
+OCR_3B_REAL_OUTPUT = """\
+The OCR should not have output any underscores. Outputting `____` constitutes an error under Rule 2, as it hallucinates placeholder symbols where none are semantically intended. Hence, the OCR result is inconsistent with the Ground Truth.
+text [50, 62, 480, 117]Starbucks Coffee
+text [50, 134, 977, 190]123 Market Street, San Francisco CA
+text [50, 206, 348, 261]Store #4521
+table [50, 352, 912, 495]<table>Grande Latte4.25Almond Milk Sub0.50</table>
+table [50, 566, 922, 621]<table>Subtotal4.75</table>
+table [50, 638, 922, 692]<table>Tax0.00</table>
+table [50, 709, 922, 764]<table>TOTAL$0.00</table>
+table [50, 781, 922, 835]<table>TOTAL$4.75</table>
+text [50, 851, 560, 903]08/10/2026 09:14 AM
+text [50, 916, 658, 978]Thank you for visiting!
+"""
 
 STARBUCKS_TEXT = """\
 Starbucks Coffee
@@ -105,20 +124,54 @@ class TestExtractMerchant:
         text = "123 Market Street\nTOTAL 4.75"
         assert extract_merchant(text) == "123 Market Street"
 
+    def test_prefers_store_name_over_leaked_model_commentary_sentence(self):
+        # Real QVAC OCR_3B output occasionally leaks a meta-commentary
+        # sentence ahead of the actual transcription -- a full sentence is
+        # never mistaken for the store name.
+        text = "There is no actual character output to extract.\nShell\nTOTAL 52.00"
+        assert extract_merchant(text) == "Shell"
+
 
 class TestParseReceipt:
     def test_full_pipeline_produces_fully_parsed_receipt(self, tmp_path: Path):
-        ocr_result = OcrResult(text=STARBUCKS_TEXT, engine_name="mock", confidence=1.0)
+        ocr_result = OcrResult(text=STARBUCKS_TEXT, engine_name="qvac", confidence=1.0)
         receipt = parse_receipt(ocr_result, tmp_path / "01_starbucks.png")
 
         assert receipt.is_fully_parsed
         assert receipt.merchant == "Starbucks Coffee"
         assert receipt.amount == 4.75
         assert receipt.txn_date == dt.date(2026, 8, 10)
-        assert receipt.ocr_engine == "mock"
+        assert receipt.ocr_engine == "qvac"
 
     def test_partial_extraction_is_marked_not_fully_parsed(self, tmp_path: Path):
-        ocr_result = OcrResult(text="Illegible smudge", engine_name="mock")
+        ocr_result = OcrResult(text="Illegible smudge", engine_name="qvac")
         receipt = parse_receipt(ocr_result, tmp_path / "bad.png")
 
         assert not receipt.is_fully_parsed
+
+    def test_handles_real_qvac_output_with_layout_markup_and_hallucinated_line(
+        self, tmp_path: Path
+    ):
+        # Regression test pinned to an actual (messy) QVAC response, not a
+        # hand-cleaned fixture -- see OCR_3B_REAL_OUTPUT above.
+        ocr_result = OcrResult(text=OCR_3B_REAL_OUTPUT, engine_name="qvac")
+        receipt = parse_receipt(ocr_result, tmp_path / "01_starbucks.png")
+
+        assert receipt.is_fully_parsed
+        assert receipt.merchant == "Starbucks Coffee"
+        # The model hallucinated a spurious "TOTAL$0.00" before the real
+        # total -- extract_amount's "last total line wins" rule picks the
+        # correct one printed last, exactly as it would on a real receipt.
+        assert receipt.amount == 4.75
+        assert receipt.txn_date == dt.date(2026, 8, 10)
+
+
+class TestStripLayoutMarkup:
+    def test_removes_bounding_box_prefix(self):
+        assert _strip_layout_markup("text [50, 62, 480, 117]Starbucks Coffee") == "Starbucks Coffee"
+
+    def test_removes_table_tags(self):
+        assert _strip_layout_markup("<table>Subtotal4.75</table>") == " Subtotal4.75 "
+
+    def test_leaves_plain_text_untouched(self):
+        assert _strip_layout_markup(STARBUCKS_TEXT) == STARBUCKS_TEXT.rstrip("\n")

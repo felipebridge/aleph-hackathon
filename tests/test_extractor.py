@@ -132,6 +132,86 @@ class TestExtractMerchant:
         assert extract_merchant(text) == "Shell"
 
 
+UBER_AR_TEXT = """\
+Uber
+Jul 2, 2026
+8:14 AM
+■ Uber One
+Thanks for riding, Martina
+We hope you enjoyed your ride.
+Total   ARS 3,120.00
+PROMO
+ARS 312.00
+Uber One credits earned
+Trip fare   ARS 3,880.00
+Booking Fee   ARS 300.00
+Promotion   -ARS 650.00
+Uber One Credits   -ARS 410.00
+Payments
+Mercado Pago
+7/2/26 8:14 AM
+ARS 3,120.00
+"""
+
+AFIP_FACTURA_TEXT = """\
+ORIGINAL (EJEMPLO)
+B
+COD. 06
+PETROSUR COMBUSTIBLES S.A.   FACTURA (MUESTRA)
+Razón Social: PETROSUR COMBUSTIBLES S.A.
+Domicilio Fiscal: Ruta Provincial 8 Km 45, Pilar, Buenos Aires
+Condición frente al IVA: IVA Responsable Inscripto
+Fecha de Emisión: 20/07/2026
+Nafta Super -   1.00   unidades   130.79   0.00   0.00   4,630.00
+Subtotal: $ 3,826.45
+Importe Otros Tributos: $ 0.00
+Importe Total: $ 4,630.00
+"""
+
+
+class TestArsAmounts:
+    def test_parses_ars_prefixed_total(self):
+        assert extract_amount(UBER_AR_TEXT) == 3120.00
+
+    def test_ars_total_wins_over_larger_trip_fare(self):
+        # Trip fare is 3880 > total 3120, but total-keyword line must win
+        assert extract_amount(UBER_AR_TEXT) == 3120.00
+
+    def test_afip_factura_importe_total(self):
+        assert extract_amount(AFIP_FACTURA_TEXT) == 4630.00
+
+    def test_afip_subtotal_not_returned_as_total(self):
+        # Subtotal 3826.45 must be skipped; Importe Total 4630.00 wins
+        assert extract_amount(AFIP_FACTURA_TEXT) != 3826.45
+
+
+class TestAfipMerchantExtraction:
+    def test_strips_factura_suffix_from_merchant_line(self):
+        assert extract_merchant(AFIP_FACTURA_TEXT) == "Petrosur Combustibles S.A."
+
+    def test_filters_original_ejemplo_noise_line(self):
+        # "ORIGINAL (EJEMPLO)" must never be returned as merchant
+        assert extract_merchant(AFIP_FACTURA_TEXT) != "Original (Ejemplo)"
+
+    def test_filters_cod_noise_line(self):
+        text = "COD. 06\nRappi\nTotal ARS 2,940.00\n07/14/2026"
+        assert extract_merchant(text) == "Rappi"
+
+    def test_uber_ar_receipt_merchant(self):
+        assert extract_merchant(UBER_AR_TEXT) == "Uber"
+
+
+class TestAfipDateExtraction:
+    def test_parses_dd_mm_yyyy_unambiguous(self):
+        # 20/07/2026 — day=20 > 12, so unambiguously DD/MM/YYYY
+        assert extract_date(AFIP_FACTURA_TEXT) == dt.date(2026, 7, 20)
+
+    def test_parses_uber_ar_short_date(self):
+        # "7/2/26 8:14 AM" — ambiguous, defaults to US MM/DD → Feb 7 or Jul 2?
+        # dateutil with dayfirst=False → 2026-07-02
+        assert extract_date(UBER_AR_TEXT) == dt.date(2026, 7, 2)
+
+
 class TestParseReceipt:
     def test_full_pipeline_produces_fully_parsed_receipt(self, tmp_path: Path):
         ocr_result = OcrResult(text=STARBUCKS_TEXT, engine_name="qvac", confidence=1.0)

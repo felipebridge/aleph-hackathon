@@ -31,24 +31,22 @@ def _strip_layout_markup(text: str) -> str:
 
 # --- Amount extraction -------------------------------------------------
 
-# Matches currency amounts with cents, e.g. $1,234.56 / 1234.56 / $45.99 /
-# 45,99 (EU decimal comma) / 1.234,56 (EU thousands+decimal) / €12.50.
+# Matches currency amounts with cents.
+# Handles: $1,234.56 / ARS 2,820.00 / €12.50 / 1.234,56 (EU) / -ARS 940.00
+# The currency prefix group is optional so bare numbers also match.
 _AMOUNT_RE = re.compile(
     r"""
-    (?<![\d.,])                     # not preceded by another digit/sep
-    [$€£]?\s*
-    (\d{1,3}(?:[.,]\d{3})*|\d+)     # integer part, optionally thousands-grouped
-    [.,](\d{2})                     # decimal part (cents)
+    (?<![\d.,])                          # not preceded by another digit/sep
+    (?:ARS|USD|EUR|[$€£])?\s*            # optional currency symbol or ISO code
+    (\d{1,3}(?:[.,]\d{3})*|\d+)          # integer part, optionally thousands-grouped
+    [.,](\d{2})                          # decimal part (cents)
     (?!\d)
     """,
     re.VERBOSE,
 )
 
-# Fallback for receipts that print a whole-currency total with no cents at
-# all (e.g. "TOTAL $50" instead of "TOTAL $50.00") -- only ever consulted
-# when _AMOUNT_RE finds nothing anywhere in the document, so it can't
-# accidentally steal a match from a properly-formatted amount.
-_AMOUNT_INT_RE = re.compile(r"(?<![\d.,])[$€£]?\s*(\d{1,6})(?!\d)")
+# Fallback for whole-currency totals with no cents (e.g. "TOTAL $50").
+_AMOUNT_INT_RE = re.compile(r"(?<![\d.,])(?:ARS|USD|EUR|[$€£])?\s*(\d{1,6})(?!\d)")
 
 _TOTAL_LINE_KEYWORDS = (
     "total",
@@ -169,7 +167,21 @@ def extract_date(text: str):
 # --- Merchant extraction ---------------------------------------------------
 
 _NOISE_LINE_RE = re.compile(
-    r"^\s*(receipt|invoice|thank you|customer copy|order\s*#?\d*)\s*$", re.IGNORECASE
+    r"^\s*(" r"receipt|invoice|thank you|customer copy|order\s*#?\d*"
+    # AFIP fiscal document headers (Argentine facturas)
+    r"|original(?:\s*\(.*?\))?"  # "ORIGINAL (EJEMPLO)"
+    r"|cod\.?\s*\d*"  # "COD. 06"
+    r"|muestra(?:\s+—.*)?$"  # "MUESTRA — DATOS FICTICIOS ..."
+    r"|e\-?ticket\s*receipt"  # "E-Ticket Receipt" (airline)
+    r")\s*$",
+    re.IGNORECASE,
+)
+
+# Strips Argentine fiscal document type from lines where the company name and
+# document type appear together, e.g. "PETROSUR S.A.  FACTURA (MUESTRA)".
+_FISCAL_DOC_SUFFIX_RE = re.compile(
+    r"\s+(?:FACTURA|REMITO|NOTA\s+DE\s+CR[EÉ]DITO|NOTA\s+DE\s+D[EÉ]BITO)" r"(?:\s*\(.*?\))?\s*$",
+    re.IGNORECASE,
 )
 
 _LEADING_DIGITS_RE = re.compile(r"^\d")
@@ -210,7 +222,12 @@ def extract_merchant(text: str) -> str | None:
         lowered = stripped.lower()
         if _AMOUNT_RE.search(stripped) or _is_total_line(lowered) or _is_skip_line(lowered):
             continue
-        candidates.append((stripped, _merchant_candidate_score(stripped, len(candidates))))
+        # Strip Argentine fiscal document type suffix that appears on the same
+        # line as the company name: "PETROSUR S.A.  FACTURA (MUESTRA)" → "PETROSUR S.A."
+        cleaned = _FISCAL_DOC_SUFFIX_RE.sub("", stripped).strip()
+        if not cleaned:
+            continue
+        candidates.append((cleaned, _merchant_candidate_score(cleaned, len(candidates))))
         if len(candidates) >= _MERCHANT_SEARCH_WINDOW:
             break
 

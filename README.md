@@ -190,3 +190,4 @@ Los tests cubren las heurísticas de extracción, el loader/validación del CSV 
 
 - **Esquema del CSV bancario**: `bank_loader.py` ya acepta alias comunes de nombres de columna (`transaction_date`, `payee`, `debit`, ...). Agregá más en `_COLUMN_ALIASES` para el formato de exportación de un banco en particular.
 - **Un modelo local distinto**: pasale a `QVACOcrEngine(model_src=...)` cualquier constante de `tetherto.qvac_sdk.models`, o una entrada de registro personalizada, para cambiar el modelo que corre en el dispositivo.
+- **Otros formatos de recibo/moneda**: `extractor.py` ya reconoce montos en ARS/USD/EUR y sabe limpiar encabezados de facturas AFIP argentinas (`FACTURA`, `ORIGINAL (EJEMPLO)`, `COD. NN`) — mismo patrón para sumar otro formato local de comprobante.

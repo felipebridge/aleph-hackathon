@@ -46,3 +46,6 @@ select = ["E", "F", "I", "UP", "B", "BLE", "C4", "DTZ", "RUF"]
 # the whole point is that a row reads like one line in a table. Wrapping
 # every field per PEP 8 line length would defeat that readability.
 "tests/*" = ["C408", "E501"]
+# Inline CSS/HTML template lines read better as one declaration per line
+# than wrapped mid-property to fit 100 chars.
+"src/reconciliation_agent/report_html.py" = ["E501"]

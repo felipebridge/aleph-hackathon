@@ -25,6 +25,7 @@ class DiscrepancyType(str, Enum):
     """The taxonomy of reconciliation outcomes we can detect."""
 
     AMOUNT_MISMATCH = "AMOUNT_MISMATCH"
+    DATE_MISMATCH = "DATE_MISMATCH"  # referenced by report_html.py's type-label map
     MISSING_IN_BANK = "MISSING_IN_BANK"  # receipt with no bank charge
     UNACCOUNTED_CHARGE = "UNACCOUNTED_CHARGE"  # bank charge with no receipt
     DUPLICATE_RECEIPT = "DUPLICATE_RECEIPT"  # two receipts, one bank charge

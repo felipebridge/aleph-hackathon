@@ -48,6 +48,24 @@ class TestExtractAmount:
         text = "Wire Transfer\nTOTAL   $1,200.00\n"
         assert extract_amount(text) == 1200.00
 
+    def test_handles_euro_symbol(self):
+        text = "Cafe Berlin\nTOTAL   €12.50\n"
+        assert extract_amount(text) == 12.50
+
+    def test_handles_eu_thousands_and_decimal_comma(self):
+        text = "Berlin Electronics\nTOTAL   1.234,56\n"
+        assert extract_amount(text) == 1234.56
+
+    def test_falls_back_to_bare_integer_total_when_no_cents_printed(self):
+        text = "Corner Store\nItem A   20\nItem B   30\nTOTAL   $50\n"
+        assert extract_amount(text) == 50.0
+
+    def test_bare_integer_fallback_never_outranks_a_cents_precise_amount(self):
+        # A garbled OCR line that reads as a bare-integer "total" must never
+        # beat a properly formatted, cents-precise total found elsewhere.
+        text = "Diner\nTOTAL DUE (approx) 46\nTOTAL   $45.99\n"
+        assert extract_amount(text) == 45.99
+
 
 class TestExtractDate:
     def test_parses_slash_date(self):
@@ -62,6 +80,15 @@ class TestExtractDate:
     def test_returns_none_when_no_date_present(self):
         assert extract_date("Merchant\nTOTAL 10.00") is None
 
+    def test_unambiguous_day_first_slash_date_overrides_us_default(self):
+        # 22 can't be a month, so this must be read as 22 Aug 2026 even
+        # though the default convention elsewhere is US month/day order.
+        assert extract_date("Receipt\n22/08/2026\nTOTAL 10.00") == dt.date(2026, 8, 22)
+
+    def test_ambiguous_slash_date_defaults_to_us_month_day_order(self):
+        # Both components are <= 12: genuinely ambiguous, defaults to MM/DD.
+        assert extract_date("Receipt\n08/10/2026\nTOTAL 10.00") == dt.date(2026, 8, 10)
+
 
 class TestExtractMerchant:
     def test_takes_first_meaningful_line(self):
@@ -74,6 +101,21 @@ class TestExtractMerchant:
     def test_skips_purely_symbolic_lines(self):
         text = "========\nUber\nTOTAL 10.00"
         assert extract_merchant(text) == "Uber"
+
+    def test_prefers_store_name_over_leading_address_line_when_both_present(self):
+        # Simulates a photographed receipt where the logo/header OCR'd fine
+        # for once, but a naive "always take line 1" heuristic would still
+        # be tempted by the address if it scored the same -- this pins the
+        # store name winning even though the address line comes first here.
+        text = "123 Market Street, San Francisco CA\nStarbucks Coffee\nTOTAL 4.75"
+        assert extract_merchant(text) == "Starbucks Coffee"
+
+    def test_falls_back_to_address_line_when_nothing_better_exists(self):
+        # If the store name line is genuinely unrecoverable, still return
+        # *something* plausible rather than None -- a human reviewing the
+        # report can eyeball the source image.
+        text = "123 Market Street\nTOTAL 4.75"
+        assert extract_merchant(text) == "123 Market Street"
 
 
 class TestParseReceipt:

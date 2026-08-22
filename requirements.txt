@@ -17,3 +17,7 @@ tetherto-qvac-sdk>=0.17,<1.0
 # Offline fallback OCR engine (also 100% local — requires the `tesseract` binary on PATH).
 pytesseract>=0.3.10,<0.4.0
 Pillow>=10.3,<11.0
+
+# PDF rasterization for both OCR engines (bundles the PDFium renderer as a
+# native wheel — no system Poppler/PDF binary needed, stays 100% local).
+pypdfium2>=4.30,<6.0

@@ -18,7 +18,9 @@ from __future__ import annotations
 
 import abc
 import asyncio
+import contextlib
 import logging
+import tempfile
 import threading
 from pathlib import Path
 from typing import Any
@@ -29,9 +31,62 @@ logger = logging.getLogger(__name__)
 
 SUPPORTED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".pdf", ".tiff", ".bmp"}
 
+#: DPI-equivalent scale used when rasterizing a PDF page to an image.
+#: 2.0 (~144 DPI at PDFium's 72-DPI base) is a good OCR-accuracy/speed
+#: tradeoff for printed receipts/invoices -- higher mostly just slows down
+#: Tesseract without meaningfully improving recognition on clean text.
+_PDF_RENDER_SCALE = 2.0
+
 
 class OcrEngineError(RuntimeError):
     """Raised when no OCR engine could process a given file."""
+
+
+def _render_pdf_pages(file_path: Path):
+    """Rasterize every page of a local PDF to a Pillow image.
+
+    Uses `pypdfium2`, which bundles Google's PDFium renderer as a native
+    wheel -- no system-installed PDF/Poppler binary required, keeping PDF
+    support consistent with the rest of this project's "100% local, no
+    extra install steps" story.
+    """
+    try:
+        import pypdfium2 as pdfium
+    except ImportError as exc:
+        raise OcrEngineError(
+            f"{file_path.name}: reading PDFs requires the `pypdfium2` package "
+            "(`pip install pypdfium2`)."
+        ) from exc
+
+    pdf = pdfium.PdfDocument(str(file_path))
+    try:
+        return [pdf[i].render(scale=_PDF_RENDER_SCALE).to_pil() for i in range(len(pdf))]
+    finally:
+        pdf.close()
+
+
+@contextlib.contextmanager
+def _resolve_attachment_paths(file_path: Path):
+    """Yield the list of local image paths an OCR engine should read for
+    `file_path` -- the file itself for a plain image, or one temporary PNG
+    per page for a PDF (cleaned up on exit).
+
+    Centralising this means both the QVAC engine (multi-attachment chat)
+    and the Tesseract engine (one `image_to_string` call per page) treat a
+    multi-page PDF identically instead of duplicating rasterization logic.
+    """
+    if file_path.suffix.lower() != ".pdf":
+        yield [file_path]
+        return
+
+    pages = _render_pdf_pages(file_path)
+    with tempfile.TemporaryDirectory(prefix="reconciliation_agent_pdf_") as tmp_dir:
+        page_paths = []
+        for i, page_image in enumerate(pages):
+            page_path = Path(tmp_dir) / f"{file_path.stem}_page{i + 1}.png"
+            page_image.save(page_path)
+            page_paths.append(page_path)
+        yield page_paths
 
 
 class BaseOCREngine(abc.ABC):
@@ -116,7 +171,7 @@ class QVACOcrEngine(BaseOCREngine):
         if self._client is not None:
             try:
                 self._run(self._client.close())
-            except Exception:  # pragma: no cover - best-effort cleanup
+            except Exception:  # pragma: no cover - best-effort cleanup, never fatal
                 logger.debug("Error closing QVAC client", exc_info=True)
         self._loop.call_soon_threadsafe(self._loop.stop)
         if self._thread is not None:
@@ -149,19 +204,23 @@ class QVACOcrEngine(BaseOCREngine):
 
         client = await self._ensure_client()
         model_id = await self._ensure_model()
-        run = completion(
-            client.transport,
-            model_id=model_id,
-            stream=False,
-            history=[
-                {
-                    "role": "user",
-                    "content": self.OCR_PROMPT,
-                    "attachments": [{"path": str(file_path.resolve())}],
-                }
-            ],
-        )
-        final = await run.final
+
+        # A multi-page PDF becomes one attachment per rasterized page --
+        # the model reads the whole document in a single completion call.
+        with _resolve_attachment_paths(file_path) as attachment_paths:
+            run = completion(
+                client.transport,
+                model_id=model_id,
+                stream=False,
+                history=[
+                    {
+                        "role": "user",
+                        "content": self.OCR_PROMPT,
+                        "attachments": [{"path": str(p.resolve())} for p in attachment_paths],
+                    }
+                ],
+            )
+            final = await run.final
         return OcrResult(text=final.content_text, engine_name=self.name, confidence=1.0)
 
     # --- BaseOCREngine interface --------------------------------------------
@@ -170,14 +229,14 @@ class QVACOcrEngine(BaseOCREngine):
         try:
             self._run(self._ensure_client())
             return True
-        except Exception:  # pragma: no cover - depends on optional local SDK/worker
+        except Exception:  # pragma: no cover - best-effort availability probe
             logger.debug("QVAC engine unavailable", exc_info=True)
             return False
 
     def read(self, file_path: Path) -> OcrResult:
         try:
             return self._run(self._read_async(file_path))
-        except Exception as exc:
+        except Exception as exc:  # converted to a domain-specific OcrEngineError below
             raise OcrEngineError(
                 f"QVAC OCR failed for {file_path.name}: {exc}. Install with "
                 "`pip install tetherto-qvac-sdk` and ensure its local worker "
@@ -198,27 +257,28 @@ class TesseractOCREngine(BaseOCREngine):
 
     def is_available(self) -> bool:
         try:
-            import pytesseract  # noqa: F401
-            from PIL import Image  # noqa: F401
+            import pytesseract
+            from PIL import Image  # noqa: F401 -- import-tested, not used directly here
 
             pytesseract.get_tesseract_version()
             return True
-        except Exception:
+        except Exception:  # noqa: BLE001 -- best-effort availability probe, any failure means "no"
             return False
 
     def read(self, file_path: Path) -> OcrResult:
         import pytesseract
         from PIL import Image
 
-        if file_path.suffix.lower() == ".pdf":
-            raise OcrEngineError(
-                f"{file_path.name}: PDF input requires the QVAC engine or a "
-                "pre-rasterised image; the Tesseract fallback only reads "
-                "raster images (png/jpg/tiff/bmp)."
-            )
+        # A PDF is rasterized to one image per page (via pypdfium2, still
+        # fully local/offline) and OCR'd page by page; a plain image is
+        # OCR'd directly. Either way the result is one merged text block.
+        with _resolve_attachment_paths(file_path) as page_paths:
+            page_texts = []
+            for page_path in page_paths:
+                with Image.open(page_path) as img:
+                    page_texts.append(pytesseract.image_to_string(img))
 
-        with Image.open(file_path) as img:
-            text = pytesseract.image_to_string(img)
+        text = "\n\n".join(page_texts)
         return OcrResult(text=text, engine_name=self.name, confidence=0.85)
 
 
@@ -268,7 +328,9 @@ def get_ocr_engine(name: str = "auto") -> BaseOCREngine:
     if name != "auto":
         cls = _ENGINES.get(name)
         if cls is None:
-            raise ValueError(f"Unknown OCR engine '{name}'. Choose from: auto, {', '.join(_ENGINES)}")
+            raise ValueError(
+                f"Unknown OCR engine '{name}'. Choose from: auto, {', '.join(_ENGINES)}"
+            )
         engine = cls()
         if not engine.is_available():
             raise OcrEngineError(f"Requested OCR engine '{name}' is not available on this machine.")

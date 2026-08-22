@@ -11,7 +11,6 @@ from dataclasses import dataclass, field
 from datetime import date
 from enum import Enum
 from pathlib import Path
-from typing import Optional
 
 
 class Severity(str, Enum):
@@ -27,9 +26,9 @@ class DiscrepancyType(str, Enum):
 
     AMOUNT_MISMATCH = "AMOUNT_MISMATCH"
     DATE_MISMATCH = "DATE_MISMATCH"
-    MISSING_IN_BANK = "MISSING_IN_BANK"           # receipt with no bank charge
-    UNACCOUNTED_CHARGE = "UNACCOUNTED_CHARGE"     # bank charge with no receipt
-    DUPLICATE_RECEIPT = "DUPLICATE_RECEIPT"       # two receipts, one bank charge
+    MISSING_IN_BANK = "MISSING_IN_BANK"  # receipt with no bank charge
+    UNACCOUNTED_CHARGE = "UNACCOUNTED_CHARGE"  # bank charge with no receipt
+    DUPLICATE_RECEIPT = "DUPLICATE_RECEIPT"  # two receipts, one bank charge
 
 
 @dataclass(slots=True)
@@ -46,9 +45,9 @@ class Receipt:
     """Structured financial data extracted from a single physical receipt."""
 
     source_file: Path
-    merchant: Optional[str]
-    amount: Optional[float]
-    txn_date: Optional[date]
+    merchant: str | None
+    amount: float | None
+    txn_date: date | None
     raw_text: str = ""
     ocr_engine: str = "unknown"
     ocr_confidence: float = 1.0
@@ -81,9 +80,9 @@ class Discrepancy:
     type: DiscrepancyType
     severity: Severity
     message: str
-    receipt: Optional[Receipt] = None
-    bank_txn: Optional[BankTransaction] = None
-    delta_amount: Optional[float] = None
+    receipt: Receipt | None = None
+    bank_txn: BankTransaction | None = None
+    delta_amount: float | None = None
     extra: dict = field(default_factory=dict)
 
 

@@ -18,7 +18,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from .models import Discrepancy, ReconciliationResult, Severity
+from .models import ReconciliationResult, Severity
 
 _SEVERITY_STYLE = {
     Severity.CRITICAL: "bold red",
@@ -72,9 +72,11 @@ def render_terminal(result: ReconciliationResult, console: Console | None = None
     console.print(table)
 
 
-def render_text_report(result: ReconciliationResult, generated_at: dt.datetime | None = None) -> str:
+def render_text_report(
+    result: ReconciliationResult, generated_at: dt.datetime | None = None
+) -> str:
     """Build the plain-text (.txt) report body."""
-    generated_at = generated_at or dt.datetime.now()
+    generated_at = generated_at or dt.datetime.now().astimezone()
     lines: list[str] = []
     add = lines.append
 

@@ -13,9 +13,10 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
+from rapidfuzz import fuzz
 
 from reconciliation_agent.config import Settings
-from reconciliation_agent.matcher import reconcile
+from reconciliation_agent.matcher import _merchant_similarity, _normalize_merchant_name, reconcile
 from reconciliation_agent.models import DiscrepancyType, Receipt, Severity
 
 
@@ -149,6 +150,67 @@ class TestMissingInBank:
         assert result.matched == []
         assert len(result.discrepancies) == 1
         assert "manual review" in result.discrepancies[0].message
+
+
+class TestMerchantNormalization:
+    def test_strips_store_numbers_and_punctuation(self):
+        assert _normalize_merchant_name("STARBUCKS STORE #4521") == "starbucks"
+
+    def test_strips_long_embedded_reference_numbers(self):
+        assert _normalize_merchant_name("SHELL OIL 57443217908") == "shell oil"
+
+    def test_normalization_raises_similarity_above_the_default_threshold(self):
+        raw_score = fuzz.token_sort_ratio("starbucks coffee", "starbucks store #4521")
+        normalized_score = _merchant_similarity("Starbucks Coffee", "STARBUCKS STORE #4521")
+
+        # Without stripping the store number, this pair would score BELOW
+        # the default 60 threshold and fail to match at all -- that's
+        # exactly the bug normalization fixes.
+        assert raw_score < 60
+        assert normalized_score >= 60
+
+    def test_reconcile_matches_despite_store_number_noise(self):
+        bank_df = make_bank_df(
+            [dict(transaction_id="TXN-1", date="2026-08-10", amount=4.75, merchant="Starbucks", description="STARBUCKS STORE #4521")]
+        )
+        receipt = make_receipt("Starbucks Coffee", 4.75, dt.date(2026, 8, 10))
+
+        result = reconcile([receipt], bank_df, make_settings())
+
+        assert len(result.matched) == 1
+        assert result.discrepancies == []
+
+
+class TestAmountDateOnlyFallback:
+    def test_garbled_merchant_still_matches_when_amount_and_date_are_unambiguous(self):
+        bank_df = make_bank_df(
+            [dict(transaction_id="TXN-1", date="2026-08-11", amount=45.99, merchant="Office Depot", description="OFFICE DEPOT #221")]
+        )
+        # Simulates badly garbled OCR on the store name -- similarity to
+        # "Office Depot" should be far below the default 60 threshold.
+        receipt = make_receipt("Xq7 Zw2 Depqt", 45.99, dt.date(2026, 8, 11))
+
+        result = reconcile([receipt], bank_df, make_settings())
+
+        assert len(result.matched) == 1
+        assert result.discrepancies == []
+        assert any("matched by amount + date alone" in note for note in result.matched[0].notes)
+
+    def test_ambiguous_fallback_does_not_guess_between_two_same_amount_charges(self):
+        bank_df = make_bank_df(
+            [
+                dict(transaction_id="TXN-1", date="2026-08-11", amount=45.99, merchant="Office Depot", description=""),
+                dict(transaction_id="TXN-2", date="2026-08-12", amount=45.99, merchant="Staples", description=""),
+            ]
+        )
+        receipt = make_receipt("Xq7 Zw2 Depqt", 45.99, dt.date(2026, 8, 11))
+
+        result = reconcile([receipt], bank_df, make_settings(date_tolerance_days=3))
+
+        # Two candidates tie on amount within the date window -- must not guess.
+        assert result.matched == []
+        types = [d.type for d in result.discrepancies]
+        assert DiscrepancyType.MISSING_IN_BANK in types
 
 
 class TestUnaccountedCharge:

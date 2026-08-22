@@ -7,7 +7,11 @@ from pathlib import Path
 
 import pytest
 
-from reconciliation_agent.bank_loader import BankStatementError, load_bank_statement, to_transactions
+from reconciliation_agent.bank_loader import (
+    BankStatementError,
+    load_bank_statement,
+    to_transactions,
+)
 
 
 def _write_csv(tmp_path: Path, content: str) -> Path:

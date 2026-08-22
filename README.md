@@ -102,6 +102,17 @@ QVAC (tetherto-qvac-sdk, VLM local en el dispositivo)
 
 `scripts/generate_sample_data.py` escribe tanto una imagen de recibo renderizada **como** su sidecar `*.ocr.txt` con el texto real, para cada muestra, así el pipeline completo (extracción → matching → reporte) se puede demostrar incluso en una máquina sin el binario worker de QVAC ni Tesseract instalados.
 
+### Soporte de PDF (facturas multipágina)
+
+Un PDF se rasteriza localmente con `pypdfium2` (bindea el renderer PDFium de Google como wheel nativo — sin binario de sistema tipo Poppler, sin salir de la máquina) antes de llegar a cualquiera de los dos motores reales:
+
+- **QVAC**: cada página rasterizada se adjunta como una imagen más en el mismo mensaje de chat (`attachments` acepta una lista), así el modelo lee el documento completo en una sola llamada de inferencia.
+- **Tesseract**: cada página se procesa con `pytesseract.image_to_string()` por separado y los textos se concatenan.
+
+Toda esta lógica está centralizada en `_resolve_attachment_paths()` (`ocr_engine.py`) para que ningún motor duplique el manejo de PDFs.
+
+
+
 ## 6. La lógica de negocio (`matcher.py`)
 
 Para cada recibo, en orden:
@@ -170,4 +181,3 @@ Los tests cubren las heurísticas de extracción, el loader/validación del CSV 
 
 - **Esquema del CSV bancario**: `bank_loader.py` ya acepta alias comunes de nombres de columna (`transaction_date`, `payee`, `debit`, ...). Agregá más en `_COLUMN_ALIASES` para el formato de exportación de un banco en particular.
 - **Un modelo local distinto**: pasale a `QVACOcrEngine(model_src=...)` cualquier constante de `tetherto.qvac_sdk.models`, o una entrada de registro personalizada, para cambiar el modelo que corre en el dispositivo.
-- **Facturas en PDF**: el motor de QVAC pasa cualquier ruta de archivo directamente como adjunto; el fallback de Tesseract por ahora solo lee imágenes rasterizadas (ver la validación en `TesseractOCREngine.read`).

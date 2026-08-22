@@ -19,18 +19,27 @@ Algorithm (per receipt, in order):
        - amounts differ                                  -> AMOUNT_MISMATCH (CRITICAL)
        - dates differ (but within tolerance)              -> noted on the match
      Either way, the bank row is now claimed and can't be reused.
-  5. No candidate at all                                  -> MISSING_IN_BANK
+  5. No candidate cleared the merchant-similarity bar (garbled OCR is a real
+     failure mode): fall back to amount+date alone, but ONLY if that pins
+     down exactly one unclaimed bank row -- if it's ambiguous, don't guess.
+     A fallback match is still a MATCH, just annotated as low-confidence.
+  6. Still nothing?                                       -> MISSING_IN_BANK
        - if a *later* receipt would have matched the same, already-claimed
          bank row, that later receipt is reported as DUPLICATE_RECEIPT
          instead of a generic miss, since that is the more actionable signal.
-  6. After all receipts are processed, any bank row never claimed is an
+  7. After all receipts are processed, any bank row never claimed is an
      UNACCOUNTED_CHARGE -- the bank charged money with no receipt on file,
      which is exactly the kind of thing this tool exists to surface.
+
+Merchant names are fuzzy-matched after stripping store numbers, phone-style
+digit runs, and punctuation (`_normalize_merchant_name`) -- "Starbucks
+Coffee" vs. "STARBUCKS STORE #4521" scores far higher normalized than raw.
 """
 
 from __future__ import annotations
 
 import logging
+import re
 
 import pandas as pd
 from rapidfuzz import fuzz
@@ -50,11 +59,25 @@ logger = logging.getLogger(__name__)
 
 _SEVERITY_ORDER = {Severity.CRITICAL: 0, Severity.WARNING: 1, Severity.INFO: 2}
 
+# Store numbers ("#4521"), long digit runs (phone/reference numbers embedded
+# in a bank description like "SHELL OIL 57443217908"), and punctuation are
+# noise for name-similarity purposes -- stripping them before fuzzy matching
+# is what lets "Starbucks Coffee" score well against "STARBUCKS STORE #4521".
+_MERCHANT_NOISE_RE = re.compile(r"#\d+|\bstore\b|\b\d{3,}\b|[^a-z0-9 ]", re.IGNORECASE)
+
+
+def _normalize_merchant_name(value: str) -> str:
+    normalized = _MERCHANT_NOISE_RE.sub(" ", value.lower())
+    return re.sub(r"\s+", " ", normalized).strip()
+
 
 def _merchant_similarity(a: str, b: str) -> float:
     if not a or not b:
         return 0.0
-    return fuzz.token_sort_ratio(a.lower(), b.lower())
+    normalized_a, normalized_b = _normalize_merchant_name(a), _normalize_merchant_name(b)
+    if not normalized_a or not normalized_b:
+        return 0.0
+    return fuzz.token_sort_ratio(normalized_a, normalized_b)
 
 
 def _find_best_candidate(
@@ -95,6 +118,33 @@ def _find_best_candidate(
     )
     best = candidates.iloc[0]
     return best, float(best["_merchant_score"])
+
+
+def _find_amount_date_only_match(
+    receipt: Receipt,
+    bank_df: pd.DataFrame,
+    claimed: set[str],
+    settings: Settings,
+) -> pd.Series | None:
+    """Last-resort match when no candidate cleared the merchant-similarity
+    bar -- garbled OCR on the store name is a common failure mode with real
+    photographed receipts. Only fires when the amount+date window pins down
+    exactly one unclaimed bank row; with two or more candidates tied on
+    amount, guessing which one is right would be worse than surfacing
+    MISSING_IN_BANK for a human to resolve.
+    """
+    date_lo = receipt.txn_date - pd.Timedelta(days=settings.date_tolerance_days)
+    date_hi = receipt.txn_date + pd.Timedelta(days=settings.date_tolerance_days)
+    date_lo = date_lo.date() if hasattr(date_lo, "date") else date_lo
+    date_hi = date_hi.date() if hasattr(date_hi, "date") else date_hi
+
+    candidates = bank_df[
+        (~bank_df["transaction_id"].isin(claimed))
+        & (bank_df["date"] >= date_lo)
+        & (bank_df["date"] <= date_hi)
+        & ((bank_df["amount"] - receipt.amount).abs() <= settings.amount_tolerance)
+    ]
+    return candidates.iloc[0] if len(candidates) == 1 else None
 
 
 def _find_prior_duplicate(
@@ -152,7 +202,14 @@ def reconcile(
             )
             continue
 
-        best, score = _find_best_candidate(receipt, bank_df, claimed, settings)
+        best, _merchant_score = _find_best_candidate(receipt, bank_df, claimed, settings)
+        low_confidence_match = False
+
+        if best is None:
+            # Merchant similarity couldn't clear the bar -- try the
+            # conservative amount+date-only fallback before giving up.
+            best = _find_amount_date_only_match(receipt, bank_df, claimed, settings)
+            low_confidence_match = best is not None
 
         if best is None:
             # Was this receipt's transaction already claimed by an earlier,
@@ -220,6 +277,13 @@ def reconcile(
             continue
 
         notes = []
+        if low_confidence_match:
+            notes.append(
+                f"Merchant name on the receipt ('{receipt.merchant}') did not clearly "
+                f"match the bank record ('{bank_txn.merchant}' / '{bank_txn.description}') -- "
+                "matched by amount + date alone because exactly one unclaimed "
+                "transaction fit that window. Verify the merchant manually."
+            )
         if date_diff_days > 0:
             notes.append(
                 f"Posted {date_diff_days} day(s) after the receipt date "

@@ -21,7 +21,28 @@ addopts = "-ra"
 [tool.black]
 line-length = 100
 target-version = ["py311"]
+# test_matcher.py deliberately keeps each bank-fixture row on one line (see
+# the matching ruff per-file-ignore) so it reads like a table; black would
+# explode every row to 8+ lines, which defeats that.
+force-exclude = "tests/test_matcher\\.py"
 
 [tool.ruff]
 line-length = 100
 src = ["src", "tests"]
+
+[tool.ruff.lint]
+# Explicit, curated selection -- ruff's true zero-config default is far
+# broader than the classic "E4/E7/E9/F" (it now pulls in async/bandit/flake8-*
+# plugins too), which produces noisy findings unrelated to this project's
+# risk profile. This set covers correctness (E/F), import order (I),
+# modern-syntax upgrades (UP), common bug patterns (B/BLE), comprehension
+# style (C4), timezone-naive datetime footguns (DTZ), and ruff's own extras
+# (RUF) without pulling in unrelated categories like async-lint or bandit.
+select = ["E", "F", "I", "UP", "B", "BLE", "C4", "DTZ", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests build fixture rows with dict(key=value, ...) instead of {"key": value}
+# literals, and keep each bank-statement fixture row on one line, on purpose:
+# the whole point is that a row reads like one line in a table. Wrapping
+# every field per PEP 8 line length would defeat that readability.
+"tests/*" = ["C408", "E501"]

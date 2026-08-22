@@ -51,7 +51,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--output",
         type=Path,
         default=Path("reports/reconciliation_report.txt"),
-        help="Where to write the .txt discrepancy report (default: reports/reconciliation_report.txt)",
+        help=(
+            "Where to write the .txt discrepancy report "
+            "(default: reports/reconciliation_report.txt)"
+        ),
     )
     parser.add_argument(
         "--ocr-engine",
@@ -66,7 +69,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--date-tolerance-days",
         type=int,
         default=3,
-        help="Max days between receipt date and bank posting date to still be a candidate match (default: 3)",
+        help=(
+            "Max days between receipt date and bank posting date to still be "
+            "a candidate match (default: 3)"
+        ),
     )
     parser.add_argument(
         "--amount-tolerance",
@@ -84,7 +90,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--large-unmatched-amount",
         type=float,
         default=200.0,
-        help="Unmatched bank charges at/above this amount are CRITICAL instead of WARNING (default: 200)",
+        help=(
+            "Unmatched bank charges at/above this amount are CRITICAL "
+            "instead of WARNING (default: 200)"
+        ),
     )
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable debug logging")
     return parser

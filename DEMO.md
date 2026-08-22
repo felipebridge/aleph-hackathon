@@ -84,6 +84,21 @@ cat reports/reconciliation_report.txt
 
 > "Y todo esto queda además en un .txt plano y un .html autocontenido — pensado para adjuntar a un mail o archivar como evidencia de auditoría."
 
+### Paso 5 (opcional, alto impacto) — demo con recibos argentinos reales
+
+Si sobra tiempo o el jurado pregunta por casos reales, mostrar el pipeline corriendo contra los recibos argentinos reales (Uber, PeYA, Cabify, PetroSur, LuzSur, Rappi, Express Courier):
+
+```bash
+python main.py \
+  --receipts-dir data/receipts_ar \
+  --bank-csv data/bank_statement_ar.csv \
+  --output reports/reporte_ar.txt
+```
+
+> "Estos son recibos reales — facturas AFIP en ARS, tickets de Uber Argentina, PDFs de PeYA y Cabify. El extractor reconoce el formato de moneda local (ARS 2,820.00), limpia los encabezados de comprobantes AFIP (ORIGINAL, COD. 06, FACTURA) y cruza contra un extracto bancario en pesos. Mismo pipeline, datos reales argentinos."
+
+El extracto `data/bank_statement_ar.csv` tiene 10 transacciones en ARS incluyendo una transferencia de $95,000 sin recibo — va a aparecer como `UNACCOUNTED_CHARGE CRITICAL` en la salida.
+
 ---
 
 ## 4. El punto técnico fuerte: qué aprendimos probando contra el worker real (30-45s)

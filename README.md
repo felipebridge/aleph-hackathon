@@ -187,7 +187,20 @@ Los tests cubren las heurísticas de extracción (incluyendo montos ARS/AFIP), e
 
 **Una corrida real observada** (`python main.py`, worker de QVAC real, sin nada pre-cargado): 7/8 recibos procesados (uno falló por el límite de contexto descripto arriba), 3 matches vía el fallback de monto+fecha —el nombre del comercio no se leyó con suficiente claridad en ninguno de los tres, así que cada uno quedó marcado "verificar manualmente" en vez de asumirse correcto—, 2 alertas CRITICAL, 7 WARNING. El caso del duplicado (07/08) es un buen ejemplo de una limitación real: como el OCR garabateó el nombre del comercio distinto en cada uno de los dos recibos, la detección de duplicados (que compara similitud de nombre) no los reconoció como el mismo comercio y ambos terminaron como hallazgos separados en vez de un `DUPLICATE_RECEIPT` — el sistema no inventó una coincidencia que no pudo confirmar, que es el comportamiento correcto aunque no sea el resultado "prolijo" de la tabla de arriba.
 
-## 10. Cómo extenderlo
+## 10. Demo con recibos argentinos reales
+
+Además del dataset de muestra, el repo incluye recibos reales argentinos (Uber AR, PeYA, Cabify, PetroSur, LuzSur, Rappi, Express Courier) en `data/receipts_ar/` y un extracto bancario en ARS en `data/bank_statement_ar.csv`:
+
+```bash
+python main.py \
+  --receipts-dir data/receipts_ar \
+  --bank-csv data/bank_statement_ar.csv \
+  --output reports/reporte_ar.txt
+```
+
+El extractor reconoce automáticamente el formato ARS (`ARS 2,820.00`), limpia encabezados de facturas AFIP (`ORIGINAL (EJEMPLO)`, `COD. 06`, `FACTURA (MUESTRA)`) y extrae fechas en formato DD/MM/YYYY. El extracto incluye una transferencia de $95,000 ARS sin recibo que aparece como `UNACCOUNTED_CHARGE CRITICAL`.
+
+## 11. Cómo extenderlo
 
 - **Esquema del CSV bancario**: `bank_loader.py` ya acepta alias comunes de nombres de columna (`transaction_date`, `payee`, `debit`, ...). Agregá más en `_COLUMN_ALIASES` para el formato de exportación de un banco en particular.
 - **Un modelo local distinto**: pasale a `QVACOcrEngine(model_src=...)` cualquier constante de `tetherto.qvac_sdk.models`, o una entrada de registro personalizada, para cambiar el modelo que corre en el dispositivo.

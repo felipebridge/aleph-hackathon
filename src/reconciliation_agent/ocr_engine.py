@@ -94,6 +94,10 @@ class QVACOcrEngine(BaseOCREngine):
 
     name = "qvac"
     DEFAULT_MODEL_SRC = "SMOLVLM2_500M_MULTIMODAL_Q8_0"  # override via model_src=...
+    # Vision models need a paired "projection" model to actually read images;
+    # without it the worker rejects attachments with "Media not supported by
+    # text-only models". Only auto-paired when using the default model above.
+    DEFAULT_PROJECTION_MODEL_SRC = "MMPROJ_SMOLVLM2_500M_MULTIMODAL_Q8_0"
 
     OCR_PROMPT = (
         "You are a receipt-scanning OCR engine. Transcribe every line of "
@@ -151,8 +155,14 @@ class QVACOcrEngine(BaseOCREngine):
             from tetherto.qvac_sdk import load_model
             from tetherto.qvac_sdk import models as qvac_models
 
+            model_config = None
+            if self._model_src is None:
+                projection_src = getattr(qvac_models, self.DEFAULT_PROJECTION_MODEL_SRC).src
+                model_config = {"projectionModelSrc": projection_src}
             model_src = self._model_src or getattr(qvac_models, self.DEFAULT_MODEL_SRC)
-            self._model_id = await load_model(client.transport, model_src=model_src)
+            self._model_id = await load_model(
+                client.transport, model_src=model_src, model_config=model_config
+            )
         return self._model_id
 
     async def _read_async(self, file_path: Path) -> OcrResult:

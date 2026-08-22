@@ -85,7 +85,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--output-html",
         type=Path,
         default=None,
-        help="Optional path to write a self-contained HTML report (e.g. reports/report.html)",
+        help=(
+            "Where to write the self-contained .html report "
+            "(default: same name as --output with a .html extension)"
+        ),
     )
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable debug logging")
     return parser
@@ -154,12 +157,10 @@ def run(settings: Settings) -> int:
 
     render_terminal(result, console=console)
     report_path = write_text_report(result, settings.output_path)
-    html_path = write_html_report(result, settings.output_path.with_suffix(".html"))
+    html_path = write_html_report(
+        result, settings.output_html or settings.output_path.with_suffix(".html")
+    )
     console.print(f"\n[dim]Full report written to {report_path} and {html_path}[/dim]")
-
-    if settings.output_html is not None:
-        html_path = write_html_report(result, settings.output_html)
-        console.print(f"[dim]HTML report written to {html_path}[/dim]")
 
     # Exit non-zero when critical issues are found -- lets this slot into a
     # CI/cron job that alerts on `echo $?` without parsing the report text.

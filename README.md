@@ -84,7 +84,7 @@ $env:QVAC_SDK_DIR = "$env:APPDATA\npm\node_modules\@qvac\sdk"
 # macOS/Linux:
 export QVAC_SDK_DIR="$(npm root -g)/@qvac/sdk"
 
-# Genera el dataset de demo (8 recibos + un bank_statement.csv)
+# Genera el dataset de demo (21 recibos + un bank_statement.csv)
 python scripts/generate_sample_data.py
 
 # Corre el agente -- la primera vez descarga el modelo de visión (~2.2 GB, una sola vez)
@@ -137,6 +137,16 @@ python main.py --whatsapp-month 2026-07 --bank-csv data/bank_statement_ar.csv
 
 **Resultado real, corriendo esto varias veces contra el worker de QVAC:** entre 2 y 7 de los 7 comprobantes se procesan según la corrida — a diferencia de los recibos sintéticos de la sección 11 (armados a propósito, chicos y de un renglón), estos son PDFs/fotos reales tamaño carta completo, y dos de ellos (`Uber_receipt_5.pdf`, `Cabify_recibo_1.pdf`) tienen 2 páginas. Eso empuja mucho más seguido contra el límite de ventana de contexto ya documentado en la sección 7 — lo confirmamos inspeccionando esos PDFs directamente (`pypdfium2`, sin QVAC): páginas tamaño 612×792pt, contra el recibo sintético de un renglón que usa la demo principal. Es una limitación real del modelo chico elegido con documentos reales completos, no un bug del código de ingesta, y no la escondemos — para producción, un modelo más grande del registry de QVAC (sección 7) es el camino obvio.
 
+### Datos sintéticos multi-mes (para explorar la interfaz web sin QVAC corriendo)
+
+`scripts/simulate_whatsapp_traffic.py` da un solo mes (2026-07) y necesita el worker de QVAC real corriendo. Para tener volumen real con el que trabajar en Modo C (sección 6) sin esa dependencia, `scripts/generate_whatsapp_demo_data.py` escribe directamente el JSONL que `monthly_dataset.py` guardaría después de un OCR real -- es fiel a la arquitectura (esa es literalmente la responsabilidad del módulo: persistir el `Receipt` ya estructurado), no un atajo por afuera de ella:
+
+```bash
+python scripts/generate_whatsapp_demo_data.py
+```
+
+Genera 4 meses (`2026-03` a `2026-06`, dejando `2026-07` reservado para el simulador real) con ~18-21 recibos cada uno, mezclando a propósito los cinco tipos de discrepancia (montos que no cierran, fechas corridas, recibos sin cargo, duplicados, cargos sin recibo) más un `bank_statement_ar_<mes>.csv` a medida para cada mes.
+
 ### Setup real (con una cuenta de Meta Business)
 
 1. Creá una app de WhatsApp Business en [Meta for Developers](https://developers.facebook.com/), conseguí un `WHATSAPP_ACCESS_TOKEN` y elegí un `WHATSAPP_VERIFY_TOKEN` propio (cualquier string secreto).
@@ -175,9 +185,9 @@ Una tercera forma de correr todo lo anterior, para quien no quiere usar la termi
 python main_web.py    # levanta en http://127.0.0.1:8080
 ```
 
-Es un formulario de una sola pantalla: elegís la fuente (carpeta local de recibos, o un mes ya cargado del dataset de WhatsApp) y el CSV del extracto bancario, y al enviar devuelve el mismo reporte HTML que genera la CLI con `--output-html` — mismos colores, misma estructura, con un link para volver y correr otra reconciliación.
+Un dashboard de una sola pantalla, no un formulario pelado: la fuente de recibos (carpeta local o un mes de WhatsApp) se elige con tiles que muestran cuántos archivos hay en cada una -- descubiertas leyendo `data/` en el momento, nada hardcodeado --, el CSV del extracto bancario tiene autocompletado con todos los `.csv` que encuentra, y un panel de "configuración avanzada" colapsable expone los cuatro umbrales del matcher (`date_tolerance_days`, `amount_tolerance`, `merchant_match_threshold`, `large_unmatched_amount`) que antes solo estaban disponibles por CLI -- importante en particular para extractos en ARS, donde el default de `large_unmatched_amount` (pensado para USD) marca casi cualquier cargo sin recibo como CRITICAL. Al enviar devuelve el mismo reporte HTML que genera la CLI con `--output-html` -- mismos colores, misma estructura, más botones para filtrar discrepancias por severidad -- y cada corrida queda en un historial de "reportes recientes" en la home.
 
-Deliberadamente sin framework de JS ni paso de build: un solo archivo ([`webapp.py`](src/reconciliation_agent/webapp.py)) con dos rutas de FastAPI que renderizan HTML server-side, más un poco de JS inline para el toggle entre fuentes y el estado de "procesando" del botón mientras corre el OCR. Corre solo en `127.0.0.1` — nunca se expone a la red — y, como el resto del proyecto, el OCR de la fuente "carpeta local" sigue corriendo 100% vía QVAC en esta misma máquina.
+Deliberadamente sin framework de JS ni paso de build: un solo archivo ([`webapp.py`](src/reconciliation_agent/webapp.py)) con dos rutas de FastAPI que renderizan HTML server-side (más una ruta estática de solo lectura para servir el historial de reportes), más JS inline mínimo para el toggle entre fuentes y el estado de "procesando" del botón mientras corre el OCR. Corre solo en `127.0.0.1` — nunca se expone a la red — y, como el resto del proyecto, el OCR de la fuente "carpeta local" sigue corriendo 100% vía QVAC en esta misma máquina.
 
 ## 7. La integración con QVAC, explicada
 
@@ -253,13 +263,17 @@ Todos los umbrales viven en [`config.py`](src/reconciliation_agent/config.py) co
 │       ├── webhook_server.py         # FastAPI: GET/POST /webhook
 │       └── simulator.py              # demo sin credenciales reales
 ├── scripts/
-│   ├── generate_sample_data.py       # genera el dataset de demo (carpeta local)
-│   └── simulate_whatsapp_traffic.py  # genera tráfico de demo (WhatsApp)
+│   ├── generate_sample_data.py        # genera el dataset de demo (carpeta local, 21 recibos)
+│   ├── generate_whatsapp_demo_data.py # genera 4 meses de dataset WhatsApp ya "OCR'ado" (sin QVAC)
+│   └── simulate_whatsapp_traffic.py   # genera tráfico de demo (WhatsApp, con QVAC real)
 ├── data/
 │   ├── bank_statement.csv            # extracto bancario simulado (demo carpeta local)
 │   ├── bank_statement_ar.csv         # extracto bancario simulado (demo WhatsApp, formato AR)
-│   ├── receipts/                     # 8 imágenes de recibo sintéticas (demo carpeta local)
-│   ├── whatsapp_intake/              # dataset previsorio mensual (se genera en runtime)
+│   ├── bank_statement_ar_<YYYY-MM>.csv  # un extracto AR por cada mes sintético (ver sección 5)
+│   ├── receipts/                     # 21 imágenes de recibo sintéticas (demo carpeta local)
+│   ├── receipts_ar/                  # recibos argentinos reales (ver sección 12)
+│   ├── whatsapp_intake/              # dataset previsorio mensual (2026-03 a 2026-06 sintéticos,
+│   │                                 # 2026-07 real vía el simulador -- ver sección 5)
 │   └── *.pdf, *.jpg                  # recibos argentinos reales (Uber, Rappi, PetroSur, ...)
 ├── tests/                            # tests unitarios de pytest
 └── reports/                          # ahí caen los reportes .txt/.html generados
@@ -276,7 +290,7 @@ Los tests cubren las heurísticas de extracción (incluyendo montos ARS/AFIP), e
 
 ## 11. Dataset de demo (carpeta local)
 
-`scripts/generate_sample_data.py` genera 8 imágenes de recibo diseñadas para ejercitar cada tipo de discrepancia que detecta el matcher. **A diferencia de una demo con texto pre-cargado, el resultado real de cada corrida depende de lo que QVAC efectivamente lea** — por eso esta tabla describe la intención de cada escenario, no un resultado garantizado:
+`scripts/generate_sample_data.py` genera 21 imágenes de recibo diseñadas para ejercitar cada tipo de discrepancia que detecta el matcher, con suficiente volumen y variedad de comercios como para que valga la pena explorarlo desde la interfaz web (sección 6). **A diferencia de una demo con texto pre-cargado, el resultado real de cada corrida depende de lo que QVAC efectivamente lea** — por eso esta tabla describe la intención de cada escenario, no un resultado garantizado:
 
 | # | Recibo | Extracto bancario | Qué ejercita |
 |---|---|---|---|
@@ -288,17 +302,30 @@ Los tests cubren las heurísticas de extracción (incluyendo montos ARS/AFIP), e
 | 06 | Delta Air Lines $610.00 (3 días antes) | $610.00 | Match limpio, con nota de fecha |
 | 07 | Shell Gas Station $52.00 | $52.00 | Match limpio |
 | 08 | Shell Gas Station $52.00 (reenviado) | (ya reclamado por 07) | `DUPLICATE_RECEIPT` |
+| 09 | Target $34.20 | $34.20 | Match limpio |
+| 10 | Whole Foods $78.42 | $78.42 | Match limpio |
+| 11 | Walgreens $12.99 (3 días antes) | $12.99 | Match limpio, con nota de fecha |
+| 12 | Home Depot $251.67 | $251.67 | Match limpio (monto grande) |
+| 13 | Best Buy $499.99 | — | `MISSING_IN_BANK` |
+| 14 | Netflix $15.49 | $15.49 | Match limpio |
+| 15 | Spotify $10.99 | $10.99 | Match limpio |
+| 16 | Chevron $61.10 | $61.10 | Match limpio |
+| 17 | Marriott Hotel $342.00 | $342.00 | Match limpio |
+| 18 | FedEx $28.35 | $28.35 | Match limpio |
+| 19 | Apple Store $1,099.00 | $1,099.00 | Match limpio (monto alto) |
+| 20 | Trader Joe's $54.10 | $54.10 | Match limpio |
+| 21 | Trader Joe's $54.10 (reenviado) | (ya reclamado por 20) | `DUPLICATE_RECEIPT` |
 | — | (sin recibo) | Wire Transfer $1,200.00 | `UNACCOUNTED_CHARGE` (crítico) |
 | — | (sin recibo) | Vending Co $6.50 | `UNACCOUNTED_CHARGE` (warning) |
+| — | (sin recibo) | AutoPay Insurance $89.00 | `UNACCOUNTED_CHARGE` (warning) |
+| — | (sin recibo) | ATM Fee $4.50 | `UNACCOUNTED_CHARGE` (warning) |
+| — | (sin recibo) | Unknown Overseas Merchant $320.00 | `UNACCOUNTED_CHARGE` (crítico) |
 
-**Una corrida real observada** (`python main.py`, worker de QVAC real, sin nada pre-cargado): 7/8 recibos procesados (uno falló por el límite de contexto descripto en la sección 7), 3 matches vía el fallback de monto+fecha —el nombre del comercio no se leyó con suficiente claridad en ninguno de los tres, así que cada uno quedó marcado "verificar manualmente" en vez de asumirse correcto—, 2 alertas CRITICAL, 7 WARNING. El caso del duplicado (07/08) es un buen ejemplo de una limitación real: como el OCR garabateó el nombre del comercio distinto en cada uno de los dos recibos, la detección de duplicados no los reconoció como el mismo comercio y ambos terminaron como hallazgos separados en vez de un `DUPLICATE_RECEIPT` — el sistema no inventó una coincidencia que no pudo confirmar, que es el comportamiento correcto aunque no sea el resultado "prolijo" de la tabla de arriba.
+**Una corrida real observada** (`python main.py`, worker de QVAC real, sobre la versión original de 8 recibos de este dataset, sin nada pre-cargado): 7/8 recibos procesados (uno falló por el límite de contexto descripto en la sección 7), 3 matches vía el fallback de monto+fecha —el nombre del comercio no se leyó con suficiente claridad en ninguno de los tres, así que cada uno quedó marcado "verificar manualmente" en vez de asumirse correcto—, 2 alertas CRITICAL, 7 WARNING. El caso del duplicado (07/08) es un buen ejemplo de una limitación real: como el OCR garabateó el nombre del comercio distinto en cada uno de los dos recibos, la detección de duplicados no los reconoció como el mismo comercio y ambos terminaron como hallazgos separados en vez de un `DUPLICATE_RECEIPT` — el sistema no inventó una coincidencia que no pudo confirmar, que es el comportamiento correcto aunque no sea el resultado "prolijo" de la tabla de arriba. Los 13 escenarios agregados después siguen sin correr contra el worker real; no reescribimos esta nota para inventar una corrida que no pasó.
 
-<<<<<<< HEAD
-## 12. Cómo extenderlo
-=======
-## 10. Demo con recibos argentinos reales
+## 12. Demo con recibos argentinos reales (Modo A, formato AR)
 
-Además del dataset de muestra, el repo incluye recibos reales argentinos (Uber AR, PeYA, Cabify, PetroSur, LuzSur, Rappi, Express Courier) en `data/receipts_ar/` y un extracto bancario en ARS en `data/bank_statement_ar.csv`:
+Además del dataset sintético de la sección 11, el repo incluye recibos reales argentinos (Uber AR, PeYA, Cabify, PetroSur, LuzSur, Rappi, Express Courier) en `data/receipts_ar/` y un extracto bancario en ARS en `data/bank_statement_ar.csv`:
 
 ```bash
 python main.py \
@@ -309,8 +336,7 @@ python main.py \
 
 El extractor reconoce automáticamente el formato ARS (`ARS 2,820.00`), limpia encabezados de facturas AFIP (`ORIGINAL (EJEMPLO)`, `COD. 06`, `FACTURA (MUESTRA)`) y extrae fechas en formato DD/MM/YYYY. El extracto incluye una transferencia de $95,000 ARS sin recibo que aparece como `UNACCOUNTED_CHARGE CRITICAL`.
 
-## 11. Cómo extenderlo
->>>>>>> 05572b55a34a3ae37b60accbd19dc36a86222f7a
+## 13. Cómo extenderlo
 
 - **Esquema del CSV bancario**: `bank_loader.py` ya acepta alias comunes de nombres de columna (`transaction_date`, `payee`, `debit`, ...). Agregá más en `_COLUMN_ALIASES` para el formato de exportación de un banco en particular.
 - **Un modelo local distinto**: pasale a `QVACOcrEngine(model_src=...)` cualquier constante de `tetherto.qvac_sdk.models`, o una entrada de registro personalizada, para cambiar el modelo que corre en el dispositivo.

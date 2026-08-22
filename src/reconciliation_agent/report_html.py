@@ -72,6 +72,20 @@ footer { text-align: center; font-size: 0.75rem; color: #aab7b8; margin-top: 16p
 .nav-back { display: inline-block; margin-bottom: 16px; color: #2980b9;
             text-decoration: none; font-size: 0.85rem; font-weight: 600; }
 .nav-back:hover { text-decoration: underline; }
+.bar { display: flex; height: 10px; border-radius: 6px; overflow: hidden;
+       margin: -10px 0 28px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+.bar span { display: block; height: 100%; }
+.filter-row { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+.filter-btn { border: 1.5px solid #dfe4ea; background: #fff; color: #566573;
+              font-size: 0.76rem; font-weight: 700; padding: 6px 14px; border-radius: 20px;
+              cursor: pointer; transition: all .12s; }
+.filter-btn:hover { border-color: #b9c4cf; }
+.filter-btn.active { border-color: transparent; color: #fff; }
+.filter-btn.active[data-sev="ALL"] { background: #566573; }
+.filter-btn.active[data-sev="CRITICAL"] { background: #c0392b; }
+.filter-btn.active[data-sev="WARNING"] { background: #d68910; }
+.filter-btn.active[data-sev="INFO"] { background: #1a5276; }
+tr[data-sev].hidden-row { display: none; }
 """
 
 
@@ -102,7 +116,7 @@ def render_html_report(
         if d.delta_amount is not None:
             delta = f'<br><small style="color:#7f8c8d">Δ ${d.delta_amount:+,.2f}</small>'
         disc_rows += (
-            f"<tr>"
+            f'<tr data-sev="{d.severity.value}">'
             f"<td>{_sev_badge(d.severity)}</td>"
             f"<td>{html.escape(_TYPE_LABEL.get(d.type, d.type.value))}</td>"
             f"<td>{html.escape(d.message)}{delta}</td>"
@@ -113,10 +127,22 @@ def render_html_report(
 
     disc_section = ""
     if disc_rows:
+        filter_row = "".join(
+            f'<button type="button" class="filter-btn{" active" if sev == "ALL" else ""}" '
+            f'data-sev="{sev}" onclick="filterDiscrepancies(this)">{label} ({count})</button>'
+            for sev, label, count in [
+                ("ALL", "Todas", len(result.discrepancies)),
+                ("CRITICAL", "Critical", result.critical_count),
+                ("WARNING", "Warning", result.warning_count),
+                ("INFO", "Info", result.info_count),
+            ]
+            if sev == "ALL" or count
+        )
         disc_section = f"""
 <section>
   <h2>Discrepancies ({len(result.discrepancies)})</h2>
-  <table>
+  <div class="filter-row">{filter_row}</div>
+  <table id="disc-table">
     <thead><tr>
       <th>Severity</th><th>Type</th><th>Details</th><th>Receipt file</th><th>Bank txn</th>
     </tr></thead>
@@ -144,6 +170,19 @@ def render_html_report(
             f"<td>{html.escape(notes)}</td>"
             f"</tr>\n"
         )
+
+    bar_total = max(len(result.matched) + len(result.discrepancies), 1)
+    bar_segments = [
+        (len(result.matched), "#27ae60"),
+        (result.critical_count, "#c0392b"),
+        (result.warning_count, "#d68910"),
+        (result.info_count, "#1a5276"),
+    ]
+    bar_html = "".join(
+        f'<span style="width:{count / bar_total * 100:.2f}%;background:{color}"></span>'
+        for count, color in bar_segments
+        if count
+    )
 
     matched_section = ""
     if matched_rows:
@@ -198,12 +237,24 @@ def render_html_report(
       <div class="label">Warnings</div>
     </div>
   </div>
+  <div class="bar">{bar_html}</div>
 
   {disc_section}
   {matched_section}
 
   <footer>Privacy-First AI Financial Reconciliation Agent &nbsp;·&nbsp; {ts}</footer>
 </div>
+<script>
+function filterDiscrepancies(btn) {{
+  var sev = btn.getAttribute('data-sev');
+  document.querySelectorAll('.filter-btn').forEach(function(b) {{ b.classList.remove('active'); }});
+  btn.classList.add('active');
+  document.querySelectorAll('#disc-table tbody tr[data-sev]').forEach(function(row) {{
+    var show = sev === 'ALL' || row.getAttribute('data-sev') === sev;
+    row.classList.toggle('hidden-row', !show);
+  }});
+}}
+</script>
 </body>
 </html>"""
 

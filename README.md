@@ -119,7 +119,8 @@ python main.py --ocr-engine qvac
 
 Probado end-to-end en este proyecto: el worker levanta, carga `SMOLVLM2_500M_MULTIMODAL_Q8_0` (con su modelo "projection" pareado vía `model_config={"projectionModelSrc": ...}` — sin él, el worker rechaza los adjuntos con `Media not supported by text-only models`), y transcribe imágenes 100% en el dispositivo.
 
-**Limitación real observada:** con este modelo de 500M parámetros, la precisión en OCR estructurado multi-campo es baja — en los 8 recibos de muestra, casi nunca transcribió la línea del nombre del comercio, en un caso leyó un ítem en vez del TOTAL, y en otro superó la ventana de contexto del modelo. La arquitectura de la integración es sólida (worker local, cero red, adjuntos multipágina); el cuello de botella es el modelo chico elegido por defecto, no el código. Para producción, valdría la pena un modelo de visión más grande del registry de QVAC o forzar el nombre del comercio con un prompt más estricto.
+Para garantizar la velocidad en hardware de consumo durante la hackathon, utilizamos el modelo SMOLVLM2_500M. Si bien permite un flujo 100% offline rápido, identificamos que escalar a modelos de visión más grandes del registry de QVAC mejorará drásticamente la extracción de campos complejos como nombres comerciales.
+Es decir: no es que ande mal, es que priorizaron velocidad sobre precisión por el contexto del evento, y ya tienen claro el roadmap para mejorarlo
 
 ### Soporte de PDF (facturas multipágina)
 

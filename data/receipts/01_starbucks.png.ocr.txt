@@ -1,0 +1,12 @@
+Starbucks Coffee
+123 Market Street, San Francisco CA
+Store #4521
+--------------------------------
+Grande Latte                4.25
+Almond Milk Sub              0.50
+--------------------------------
+Subtotal                     4.75
+Tax                          0.00
+TOTAL                       $4.75
+08/10/2026 09:14 AM
+Thank you for visiting!

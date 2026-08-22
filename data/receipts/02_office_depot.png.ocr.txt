@@ -1,0 +1,10 @@
+Office Depot
+221 Business Park Dr
+--------------------------------
+Copy Paper Case             29.99
+Ink Cartridge Combo         16.00
+--------------------------------
+Subtotal                    45.99
+Tax                          0.00
+TOTAL                      $45.99
+08/11/2026 02:47 PM

@@ -1,0 +1,8 @@
+Delta Air Lines
+E-Ticket Receipt
+--------------------------------
+Flight NYC-LAX              610.00
+--------------------------------
+TOTAL                     $610.00
+08/14/2026
+Confirmation: 0062178432

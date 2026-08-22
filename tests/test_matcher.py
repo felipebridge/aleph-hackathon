@@ -30,6 +30,9 @@ def make_settings(**overrides) -> Settings:
 
 
 def make_bank_df(rows: list[dict]) -> pd.DataFrame:
+    columns = ["transaction_id", "date", "amount", "merchant", "description"]
+    if not rows:
+        return pd.DataFrame(columns=columns)
     df = pd.DataFrame(rows)
     df["date"] = pd.to_datetime(df["date"]).dt.date
     return df
@@ -88,7 +91,11 @@ class TestCleanMatch:
         result = reconcile([receipt], bank_df, make_settings(date_tolerance_days=3))
 
         assert result.matched == []
-        assert result.discrepancies[0].type is DiscrepancyType.MISSING_IN_BANK
+        types = [d.type for d in result.discrepancies]
+        # The receipt has no candidate within tolerance, AND the untouched
+        # bank row is itself now unaccounted-for -- both are correct findings.
+        assert DiscrepancyType.MISSING_IN_BANK in types
+        assert DiscrepancyType.UNACCOUNTED_CHARGE in types
 
 
 class TestAmountMismatch:
@@ -122,9 +129,7 @@ class TestAmountMismatch:
 
 class TestMissingInBank:
     def test_receipt_with_no_bank_charge_flagged_warning(self):
-        bank_df = make_bank_df(
-            [dict(transaction_id="TXN-1", date="2026-08-10", amount=4.75, merchant="Starbucks", description="")]
-        )
+        bank_df = make_bank_df([])  # nothing on the statement at all
         receipt = make_receipt("Amazon Web Services", 89.00, dt.date(2026, 8, 9))
 
         result = reconcile([receipt], bank_df, make_settings())
@@ -134,9 +139,7 @@ class TestMissingInBank:
         assert result.discrepancies[0].severity is Severity.WARNING
 
     def test_partially_parsed_receipt_is_flagged_not_matched(self):
-        bank_df = make_bank_df(
-            [dict(transaction_id="TXN-1", date="2026-08-10", amount=4.75, merchant="Starbucks", description="")]
-        )
+        bank_df = make_bank_df([])
         unparsed = Receipt(
             source_file=Path("blurry.png"), merchant=None, amount=None, txn_date=None, raw_text="???"
         )

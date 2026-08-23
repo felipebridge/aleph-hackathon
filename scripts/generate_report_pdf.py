@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Genera un PDF explicativo de una corrida de reconciliación. 
+"""Genera un PDF explicativo de una corrida de reconciliación.
 
 Corre el pipeline sobre una carpeta de recibos + un extracto bancario y
 produce un documento que explica, comprobante por comprobante, cuáles

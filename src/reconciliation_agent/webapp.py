@@ -301,23 +301,6 @@ def _load_income(path: str) -> pd.DataFrame:
     return df
 
 
-def _load_demo_receipts(receipts_dir: str) -> list[Receipt]:
-    """OCR de los recibos de la carpeta (QVAC si está, si no sidecars)."""
-    try:
-        files = discover_receipt_files(Path(receipts_dir))
-    except FileNotFoundError:
-        return []
-    engine = _get_engine()
-    active = engine if engine.is_available() else SidecarOcrEngine()
-    receipts: list[Receipt] = []
-    for path in files:
-        try:
-            receipts.append(parse_receipt(active.read(path), path))
-        except OcrEngineError:
-            continue
-    return receipts
-
-
 @app.get("/api/owner/dashboard")
 def api_owner_dashboard(
     income_csv: str = _DEFAULT_INCOME,

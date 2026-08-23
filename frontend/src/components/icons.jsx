@@ -13,9 +13,6 @@ export const IconWallet = (p) => (
 export const IconReceipt = (p) => (
   <svg viewBox="0 0 24 24" {...base} {...p}><path d="M6 3h12v18l-3-2-3 2-3-2-3 2V3Z" /><path d="M9 8h6M9 12h6" /></svg>
 )
-export const IconUsers = (p) => (
-  <svg viewBox="0 0 24 24" {...base} {...p}><circle cx="9" cy="8" r="3" /><path d="M3.5 20a5.5 5.5 0 0 1 11 0" /><path d="M16 5.5a3 3 0 0 1 0 5.8" /><path d="M17.5 20a5.5 5.5 0 0 0-3-4.9" /></svg>
-)
 export const IconUpload = (p) => (
   <svg viewBox="0 0 24 24" {...base} {...p}><path d="M12 16V4" /><path d="m7 9 5-5 5 5" /><path d="M4 20h16" /></svg>
 )
@@ -33,7 +30,4 @@ export const IconCheck = (p) => (
 )
 export const IconTrend = (p) => (
   <svg viewBox="0 0 24 24" {...base} {...p}><path d="m3 17 6-6 4 4 8-8" /><path d="M21 7h-5M21 7v5" /></svg>
-)
-export const IconSettings = (p) => (
-  <svg viewBox="0 0 24 24" {...base} {...p}><circle cx="12" cy="12" r="3" /><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2" /></svg>
 )

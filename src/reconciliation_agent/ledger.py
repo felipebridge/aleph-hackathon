@@ -13,7 +13,7 @@ import hashlib
 import json
 from pathlib import Path
 
-from .categories import CATEGORIES, categorize, category_breakdown
+from .categories import categorize, category_breakdown
 from .matcher import _normalize_merchant_name
 from .movements import load_movements
 

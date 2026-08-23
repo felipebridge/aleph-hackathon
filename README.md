@@ -1,3 +1,7 @@
+# Aleph Hackathon 2026
+
+![Banner](Images/banner.jpeg)
+
 # AI Financial Reconciliation Agent
 
 An agent for small accounting firms: it reconciles client receipts against bank statements and flags billing errors or fraud. OCR and matching run **100% locally** via QVAC — financial data never leaves the machine.

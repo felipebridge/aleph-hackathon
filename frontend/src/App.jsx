@@ -30,10 +30,13 @@ export default function App() {
   const nav = NAV[role]
   const current = nav.find((n) => n.key === activeKey) || nav[0]
 
+  const switchRole = (r) => { setRole(r); setActiveKey(NAV[r][0].key) }
+
   return (
     <DashboardShell
       role={role} nav={nav} activeKey={activeKey} onNav={setActiveKey}
       onLogout={() => { setRole(null); setActiveKey(null) }}
+      onSwitchRole={switchRole}
       title={current.title}
     >
       {role === 'owner' && <OwnerDashboard />}

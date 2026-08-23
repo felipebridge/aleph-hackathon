@@ -1,8 +1,10 @@
 import { useState } from 'react'
-import { IconBell, IconLogout } from './icons.jsx'
+import { IconLogout } from './icons.jsx'
 import { useT } from '../i18n.jsx'
 import LangToggle from './LangToggle.jsx'
 import PlansBar from './PlansBar.jsx'
+import NotificationsMenu from './NotificationsMenu.jsx'
+import AccountMenu from './AccountMenu.jsx'
 
 function NavItem({ icon, label, active, onClick }) {
   return (
@@ -21,7 +23,7 @@ function NavItem({ icon, label, active, onClick }) {
 }
 
 export default function DashboardShell({
-  role, nav, activeKey, onNav, onLogout, title, children,
+  role, nav, activeKey, onNav, onLogout, onSwitchRole, title, children,
 }) {
   const { t } = useT()
   const [plansOpen, setPlansOpen] = useState(false)
@@ -78,12 +80,8 @@ export default function DashboardShell({
             <span className="hidden rounded-full bg-panel2 px-3 py-1 text-xs font-semibold text-slate-300 ring-1 ring-stroke sm:inline">
               {roleLabel}
             </span>
-            <button className="flex h-9 w-9 items-center justify-center rounded-full bg-panel2 text-slate-400 ring-1 ring-stroke transition hover:text-white">
-              <IconBell className="h-5 w-5" />
-            </button>
-            <div className="flex h-9 w-9 items-center justify-center rounded-full bg-gradient-to-br from-brand to-brand-soft text-sm font-bold text-white">
-              {role === 'owner' ? 'D' : 'C'}
-            </div>
+            <NotificationsMenu />
+            <AccountMenu role={role} onSwitchRole={onSwitchRole} onLogout={onLogout} />
           </div>
         </header>
 

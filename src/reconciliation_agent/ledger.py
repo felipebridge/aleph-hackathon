@@ -90,7 +90,10 @@ def _annotate_alerts(invoices: list[dict]) -> None:
     duplicados, IVA que no da el 21%, y comprobantes donde el total no cuadra
     con neto + IVA (error de facturación).
     """
-    seen: dict[tuple, str] = {}
+    # Para duplicados: agrupamos por (contraparte, monto) y recordamos las fechas
+    # ya vistas; sólo es duplicado si las fechas están cerca (mismo cobro repetido),
+    # no un cargo recurrente legítimo de meses distintos.
+    seen: dict[tuple, list[tuple[str, str]]] = {}
     for inv in invoices:
         alert_type = None
         params: dict = {}
@@ -119,18 +122,34 @@ def _annotate_alerts(invoices: list[dict]) -> None:
                 alert_type, severity = "iva", "alta"
                 params = {"iva": iva, "net": net, "expected": expected}
 
-        # 4) Posible duplicado: misma contraparte + mismo monto.
+        # 4) Posible duplicado: misma contraparte + mismo monto + fechas cercanas
+        # (<= 10 días). Los cargos recurrentes de meses distintos NO se marcan.
         key = (_normalize_merchant_name(inv.get("counterparty") or ""), round(amount, 2))
+        inv_date = inv.get("date")
         if not alert_type and key in seen:
-            alert_type, severity = "duplicate", "alta"
-            params = {"of": seen[key]}
-        seen.setdefault(key, inv["id"])
+            for prev_id, prev_date in seen[key]:
+                if _days_between(inv_date, prev_date) <= 10:
+                    alert_type, severity = "duplicate", "alta"
+                    params = {"of": prev_id}
+                    break
+        seen.setdefault(key, []).append((inv["id"], inv_date))
 
         inv["status"] = "alerta" if alert_type else "ok"
         inv["alert_type"] = alert_type
         inv["alert_params"] = params
         inv["alert"] = _alert_text_es(alert_type, params)  # fallback en español
         inv["alert_severity"] = severity if alert_type else None
+
+
+def _days_between(a: str | None, b: str | None) -> int:
+    """Días absolutos entre dos fechas ISO; grande si falta alguna."""
+    if not a or not b:
+        return 9999
+    from datetime import date
+    try:
+        return abs((date.fromisoformat(a) - date.fromisoformat(b)).days)
+    except ValueError:
+        return 9999
 
 
 def _alert_text_es(alert_type: str | None, p: dict) -> str | None:

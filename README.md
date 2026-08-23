@@ -1,4 +1,4 @@
-# Aleph Hackathon 2026
+<h1 align="center">Aleph Hackathon 2026</h1>
 
 ![Banner](Images/banner.jpeg)
 

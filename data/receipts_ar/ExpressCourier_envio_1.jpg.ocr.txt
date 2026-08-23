@@ -1,0 +1,12 @@
+ORIGINAL (EJEMPLO)
+B
+COD. 06
+EXPRESS COURIER S.R.L.   FACTURA (MUESTRA)
+Razon Social: EXPRESS COURIER S.R.L.
+CUIT: 30-71555666-9
+Fecha de Emision: 2026-07-18
+Envio express 5kg           5,120.00
+Seguro                      1,080.00
+Subtotal: $ 5,123.97
+Importe Total: $ 6,200.00
+CAE: 74555666777888

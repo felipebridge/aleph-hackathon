@@ -1,0 +1,8 @@
+Uber
+Gracias por viajar, Martina
+Fecha: 2026-07-20
+Viaje                       ARS 3,400.00
+Tarifa de reserva           ARS 280.00
+Promoción                  -ARS 560.00
+Total                       ARS 3,120.00
+Mercado Pago

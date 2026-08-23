@@ -1,0 +1,7 @@
+Cabify
+Recibo de viaje
+Fecha: 2026-07-15
+Tarifa                      ARS 2,520.00
+Peaje                       ARS 300.00
+Total                       ARS 2,820.00
+Pago: Tarjeta

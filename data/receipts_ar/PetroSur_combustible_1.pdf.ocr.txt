@@ -1,0 +1,12 @@
+ORIGINAL (EJEMPLO)
+B
+COD. 06
+PETROSUR COMBUSTIBLES S.A.   FACTURA (MUESTRA)
+Razon Social: PETROSUR COMBUSTIBLES S.A.
+CUIT: 30-71234567-8
+Fecha de Emision: 2026-07-08
+Nafta Super  1.00 unidades  4,630.00
+Subtotal: $ 3,826.45
+Importe Otros Tributos: $ 0.00
+Importe Total: $ 4,630.00
+CAE: 74123456789012

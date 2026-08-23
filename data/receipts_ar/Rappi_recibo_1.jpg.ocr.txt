@@ -1,0 +1,8 @@
+Rappi
+Pedido #A-88213
+Fecha: 2026-07-05
+Producto                    ARS 2,340.00
+Costo de envío              ARS 450.00
+Servicio                    ARS 150.00
+Total                       ARS 2,940.00
+Pago: Tarjeta de crédito

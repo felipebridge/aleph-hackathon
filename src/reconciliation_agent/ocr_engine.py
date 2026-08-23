@@ -202,3 +202,78 @@ def get_ocr_engine() -> QVACOcrEngine:
             "https://docs.qvac.tether.io/system-requirements/ for supported platforms."
         )
     return engine
+
+
+class TesseractOcrEngine:
+    """OCR local vía Tesseract, para leer imágenes/PDF arbitrarios cuando el
+    worker de QVAC no está disponible.
+
+    Corre 100% en la máquina (binario local, sin red), así que preserva la
+    propiedad de privacidad del proyecto. Se usa como respaldo del OCR primario
+    (QVAC) para el flujo de "subir una foto cualquiera" del contador.
+    """
+
+    name = "tesseract"
+
+    def is_available(self) -> bool:
+        try:
+            import pytesseract
+
+            pytesseract.get_tesseract_version()
+            return True
+        except Exception:  # noqa: BLE001 -- cualquier fallo => no disponible
+            return False
+
+    def read(self, file_path: Path) -> OcrResult:
+        import pytesseract
+        from PIL import Image
+
+        # PDF -> una imagen por página (pypdfium2, local); imagen -> directo.
+        with _resolve_attachment_paths(file_path) as page_paths:
+            texts = []
+            for page_path in page_paths:
+                with Image.open(page_path) as img:
+                    # Español + inglés: los comprobantes AR mezclan ambos.
+                    try:
+                        texts.append(pytesseract.image_to_string(img, lang="spa+eng"))
+                    except pytesseract.TesseractError:
+                        texts.append(pytesseract.image_to_string(img))
+        return OcrResult(text="\n\n".join(texts), engine_name=self.name, confidence=0.8)
+
+    def close(self) -> None:  # simetría con QVACOcrEngine
+        pass
+
+
+class SidecarOcrEngine:
+    """Deterministic OCR fallback for demos when the QVAC worker isn't installed.
+
+    Reads a pre-computed `<receipt>.ocr.txt` sidecar next to each file instead
+    of running a live vision model. This is NOT a substitute for real OCR --
+    the sidecar text was itself produced offline -- but it keeps the web demo
+    and the pipeline runnable end-to-end on a machine without the ~2.2 GB QVAC
+    worker set up. QVAC remains the primary engine; this only kicks in when it
+    is unavailable and a sidecar exists.
+    """
+
+    name = "sidecar"
+
+    @staticmethod
+    def sidecar_path(file_path: Path) -> Path:
+        return file_path.with_suffix(file_path.suffix + ".ocr.txt")
+
+    def has_sidecar(self, file_path: Path) -> bool:
+        return self.sidecar_path(file_path).exists()
+
+    def is_available(self) -> bool:
+        return True
+
+    def read(self, file_path: Path) -> OcrResult:
+        sidecar = self.sidecar_path(file_path)
+        if not sidecar.exists():
+            raise OcrEngineError(
+                f"No OCR sidecar found for {file_path.name} (expected {sidecar.name})."
+            )
+        return OcrResult(text=sidecar.read_text(encoding="utf-8"), engine_name=self.name)
+
+    def close(self) -> None:  # symmetry with QVACOcrEngine; nothing to release
+        pass

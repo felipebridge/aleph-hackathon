@@ -24,9 +24,16 @@ def _bank_csv(tmp_path: Path) -> Path:
 
 
 class TestIndex:
-    def test_renders_the_form(self):
+    def test_root_serves_spa_or_build_hint(self):
         client = TestClient(app)
         response = client.get("/")
+        assert response.status_code == 200
+        # Either the built SPA shell or the "not built yet" hint -- both 200.
+        assert "<div id=\"root\">" in response.text or "npm run build" in response.text
+
+    def test_classic_form_still_available(self):
+        client = TestClient(app)
+        response = client.get("/classic")
         assert response.status_code == 200
         assert "Reconciliar" in response.text
 
@@ -36,7 +43,7 @@ class TestIndex:
             "2026-07",
             Receipt(source_file=Path("x.jpg"), merchant="Rappi", amount=1.0, txn_date=None),
         )
-        response = TestClient(app).get("/")
+        response = TestClient(app).get("/classic")
         assert "2026-07" in response.text
 
 
@@ -102,6 +109,29 @@ class TestReconcileFromFolder:
             },
         )
         assert "QVAC_SDK_DIR" in response.text
+
+    def test_falls_back_to_sidecar_when_qvac_unavailable(self, tmp_path, monkeypatch):
+        # QVAC down, but a pre-computed .ocr.txt sidecar exists -> pipeline runs.
+        receipts_dir = tmp_path / "receipts"
+        receipts_dir.mkdir()
+        (receipts_dir / "starbucks.png").write_bytes(b"fake")
+        (receipts_dir / "starbucks.png.ocr.txt").write_text(
+            "Starbucks\nTotal $4.75\n2026-08-10", encoding="utf-8"
+        )
+        monkeypatch.setattr(QVACOcrEngine, "is_available", lambda self: False)
+
+        client = TestClient(app)
+        response = client.post(
+            "/api/reconcile",
+            data={
+                "source": "folder",
+                "receipts_dir": str(receipts_dir),
+                "bank_csv": str(_bank_csv(tmp_path)),
+            },
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["summary"]["clean_matches"] == 1
 
 
 class TestReconcileFromWhatsapp:

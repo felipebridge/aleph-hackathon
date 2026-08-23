@@ -10,6 +10,7 @@ from PIL import Image
 from reconciliation_agent.ocr_engine import (
     OcrEngineError,
     QVACOcrEngine,
+    SidecarOcrEngine,
     _resolve_attachment_paths,
     get_ocr_engine,
 )
@@ -57,3 +58,25 @@ class TestPdfRasterization:
         with _resolve_attachment_paths(pdf_path) as paths:
             assert len(paths) == 2
             assert all(p.exists() for p in paths)
+
+
+class TestSidecarOcrEngine:
+    def test_reads_sidecar_text_when_present(self, tmp_path: Path):
+        receipt = tmp_path / "uber.pdf"
+        receipt.write_bytes(b"%PDF-1.4 fake")
+        (tmp_path / "uber.pdf.ocr.txt").write_text("Uber\nTotal ARS 3,120.00", encoding="utf-8")
+
+        engine = SidecarOcrEngine()
+        assert engine.is_available() is True
+        assert engine.has_sidecar(receipt) is True
+        result = engine.read(receipt)
+        assert "3,120.00" in result.text
+        assert result.engine_name == "sidecar"
+
+    def test_missing_sidecar_raises(self, tmp_path: Path):
+        receipt = tmp_path / "no_sidecar.jpg"
+        receipt.write_bytes(b"fake")
+        engine = SidecarOcrEngine()
+        assert engine.has_sidecar(receipt) is False
+        with pytest.raises(OcrEngineError):
+            engine.read(receipt)

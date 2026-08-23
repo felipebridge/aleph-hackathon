@@ -1,0 +1,12 @@
+ORIGINAL (EJEMPLO)
+B
+COD. 06
+LUZSUR DISTRIBUIDORA S.A.   FACTURA (MUESTRA)
+Razon Social: LUZSUR DISTRIBUIDORA S.A.
+CUIT: 30-70987654-3
+Fecha de Emision: 2026-07-12
+Consumo electrico kWh       12,300.00
+Cargo fijo                  2,700.00
+Subtotal: $ 12,396.69
+Importe Total: $ 15,000.00
+CAE: 74987654321098

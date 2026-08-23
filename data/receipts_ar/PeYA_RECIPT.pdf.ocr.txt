@@ -1,0 +1,8 @@
+PedidosYa
+Comprobante de compra
+Fecha: 2026-07-10
+Empanadas x12               ARS 1,400.00
+Costo de envio              ARS 350.00
+Servicio                    ARS 100.00
+Total                       ARS 1,850.00
+Pago: Mercado Pago

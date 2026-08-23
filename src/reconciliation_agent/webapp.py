@@ -1,43 +1,50 @@
-"""Local web UI for the reconciliation agent.
+"""Minimal local web UI for the reconciliation agent.
 
-One FastAPI app, server-rendered HTML -- no JS framework, no build step.
-It's a thin HTTP layer over the exact same pipeline the CLI uses
-(bank_loader, ocr_engine, extractor, matcher, report_html); nothing here
-duplicates business logic. The extra surface versus a bare form --
-discovering available receipt sources/bank CSVs, exposing the matcher's
-thresholds, keeping a history of past runs -- is presentation only, built
-entirely on top of that same pipeline.
+One FastAPI app, two routes, server-rendered HTML -- no JS framework, no
+build step. It's a thin HTTP layer over the exact same pipeline the CLI
+uses (bank_loader, ocr_engine, extractor, matcher, report_html); nothing
+here duplicates business logic.
 """
 
 from __future__ import annotations
 
-import datetime as dt
-import html
 import logging
-import re
+import tempfile
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Form
-from fastapi.responses import HTMLResponse
+import pandas as pd
+from fastapi import FastAPI, File, Form, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import monthly_dataset
+import time
+
+from . import dashboard, ledger, monthly_dataset, movements
 from .bank_loader import BankStatementError, load_bank_statement
+from .categories import categorize
 from .cli import discover_receipt_files
 from .config import Settings
 from .extractor import parse_receipt
 from .matcher import reconcile
 from .models import Receipt
-from .ocr_engine import OcrEngineError, QVACOcrEngine
+from .ocr_engine import (
+    OcrEngineError,
+    QVACOcrEngine,
+    SidecarOcrEngine,
+    TesseractOcrEngine,
+)
 from .report import write_text_report
 from .report_html import render_html_report, write_html_report
+from .serializers import result_to_dict
 
 logger = logging.getLogger(__name__)
 
-DATA_DIR = Path("data")
-REPORTS_DIR = Path("reports")
-REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+# Rutas por defecto de los datasets de demo argentinos.
+_DEFAULT_EXPENSES = "data/bank_statement_ar.csv"
+_DEFAULT_INCOME = "data/income_ar.csv"
+_DEFAULT_RECEIPTS = "data/receipts_ar"
 
 _engine: QVACOcrEngine | None = None
 
@@ -57,107 +64,115 @@ async def _lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="Reconciliation Agent", lifespan=_lifespan)
-app.mount("/report-files", StaticFiles(directory=str(REPORTS_DIR)), name="report-files")
+
+# The React dev server (Vite) runs on a different port during development.
+# In production the SPA is built and served from the same origin, so this
+# only matters for local dev -- kept permissive for localhost convenience.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+def _run_reconciliation(
+    source: str,
+    receipts_dir: str,
+    whatsapp_month: str,
+    bank_csv: str,
+):
+    """Shared pipeline used by both the HTML and JSON endpoints.
+
+    Returns (result, None) on success or (None, error_message) on a
+    recoverable input/engine error.
+    """
+    try:
+        bank_df = load_bank_statement(Path(bank_csv))
+    except BankStatementError as exc:
+        return None, str(exc)
+
+    if source == "whatsapp":
+        if not whatsapp_month:
+            return None, "Elegí un mes del dataset de WhatsApp."
+        receipts: list[Receipt] = monthly_dataset.load(whatsapp_month)
+    else:
+        try:
+            files = discover_receipt_files(Path(receipts_dir))
+        except FileNotFoundError as exc:
+            return None, str(exc)
+
+        # QVAC is the primary engine. When the worker isn't installed (e.g. on a
+        # demo laptop without the ~2.2 GB model), fall back to deterministic
+        # sidecar OCR text for files that have it, so the pipeline still runs
+        # end-to-end. If neither QVAC nor any sidecar is available, surface the
+        # actionable install error.
+        engine = _get_engine()
+        if engine.is_available():
+            active_engine = engine
+        else:
+            sidecar = SidecarOcrEngine()
+            if not any(sidecar.has_sidecar(p) for p in files):
+                return None, (
+                    "El worker de QVAC no está disponible y no hay texto OCR "
+                    "pre-computado para esta carpeta. Instalá QVAC con "
+                    "`npm install -g @qvac/sdk@0.17.1` (y seteá QVAC_SDK_DIR), "
+                    "o generá los sidecars con "
+                    "`python scripts/generate_ar_sidecars.py`."
+                )
+            active_engine = sidecar
+
+        receipts = []
+        for path in files:
+            try:
+                ocr_result = active_engine.read(path)
+            except OcrEngineError as exc:
+                logger.warning("Skipping %s: %s", path.name, exc)
+                continue
+            receipts.append(parse_receipt(ocr_result, path))
+
+    settings = Settings(
+        receipts_dir=Path(receipts_dir),
+        bank_csv=Path(bank_csv),
+        output_path=Path("reports/reconciliation_report.txt"),
+    )
+    result = reconcile(receipts, bank_df, settings)
+    write_text_report(result, settings.output_path)
+    write_html_report(result, settings.output_path.with_suffix(".html"))
+    return result, None
 
 _CSS = """
 * { box-sizing: border-box; margin: 0; padding: 0; }
-:root {
-  --bg: #f4f6f9; --ink: #2c3e50; --muted: #7f8c8d; --line: #e3e8ee;
-  --card: #fff; --accent: #2980b9; --accent-dark: #21618c;
-  --green: #27ae60; --green-bg: #eafaf1; --red: #c0392b; --red-bg: #fdf2f2;
-  --yellow: #d68910; --yellow-bg: #fef9e7;
-}
 body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-       background: var(--bg); color: var(--ink); padding: 32px 20px 60px; }
-.container { max-width: 880px; margin: 0 auto; }
-header.top { background: linear-gradient(135deg, #1a252f, #212f3d); color: #fff;
-         border-radius: 12px; padding: 30px 34px; margin-bottom: 24px; }
-header.top h1 { font-size: 1.55rem; font-weight: 700; margin-bottom: 6px; display: flex;
-            align-items: center; gap: 10px; }
-header.top p  { font-size: 0.85rem; color: #aab7b8; line-height: 1.5; }
-.badge { display: inline-block; background: var(--green); color: #fff;
-         font-size: 0.68rem; font-weight: 700; padding: 3px 10px;
-         border-radius: 20px; vertical-align: middle; letter-spacing: .03em; }
-.grid { display: grid; grid-template-columns: 1fr; gap: 20px; }
-@media (min-width: 760px) { .grid.two { grid-template-columns: 1.4fr 1fr; align-items: start; } }
-.card { background: var(--card); border-radius: 12px; padding: 26px 28px;
-        box-shadow: 0 1px 4px rgba(0,0,0,.07); border: 1px solid var(--line); }
-.card h2 { font-size: 0.78rem; font-weight: 700; color: var(--muted);
-           text-transform: uppercase; letter-spacing: .06em; margin-bottom: 16px; }
-.field { margin-bottom: 20px; }
-.field:last-child { margin-bottom: 0; }
-label.field-label { display: block; font-size: 0.78rem; font-weight: 700; color: #566573;
-        text-transform: uppercase; letter-spacing: .04em; margin-bottom: 8px; }
-.hint { font-size: 0.78rem; color: var(--muted); margin-top: 6px; line-height: 1.4; }
-.source-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-                gap: 10px; margin-bottom: 4px; }
-.tile { position: relative; display: block; border: 1.5px solid var(--line); border-radius: 10px;
-        padding: 14px 14px 12px; cursor: pointer; transition: border-color .12s, background .12s; }
-.tile:hover { border-color: #b9c4cf; }
-.tile input { position: absolute; opacity: 0; }
-.tile .tile-title { font-weight: 700; font-size: 0.88rem; margin-bottom: 3px; }
-.tile .tile-sub { font-size: 0.76rem; color: var(--muted); }
-.tile input:checked ~ .tile-check { display: block; }
-.tile-check { display: none; position: absolute; top: 10px; right: 10px; width: 16px; height: 16px;
-              border-radius: 50%; background: var(--accent); }
-.tile-check::after { content: ''; position: absolute; left: 5px; top: 2px; width: 4px; height: 8px;
-                      border: solid #fff; border-width: 0 2px 2px 0; transform: rotate(45deg); }
-.tile.selected { border-color: var(--accent); background: #f3f9fd; }
-.tile.empty { opacity: .55; cursor: not-allowed; }
-input[type=text], input[type=number], select {
-       width: 100%; padding: 10px 12px; border: 1px solid #dfe4ea;
-       border-radius: 7px; font-size: 0.88rem; font-family: inherit; background: #fff; }
-input[list] { width: 100%; }
-.two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-button.primary { width: 100%; background: var(--accent); color: #fff; border: none;
-         border-radius: 8px; padding: 14px; font-size: 0.95rem; font-weight: 700;
-         cursor: pointer; margin-top: 18px; letter-spacing: .01em; }
-button.primary:hover { background: var(--accent-dark); }
-button.primary:disabled { background: #95a5a6; cursor: wait; }
-details.adv { margin-top: 4px; border-top: 1px solid var(--line); padding-top: 14px; }
-details.adv summary { cursor: pointer; font-size: 0.8rem; font-weight: 700; color: var(--accent);
-                       list-style: none; user-select: none; }
-details.adv summary::-webkit-details-marker { display: none; }
-details.adv summary::before { content: '\\25B8  '; }
-details.adv[open] summary::before { content: '\\25BE  '; }
-details.adv .adv-body { padding-top: 16px; }
-.error { background: var(--red-bg); border: 1px solid var(--red); color: #922b21;
-         border-radius: 10px; padding: 16px 20px; margin-bottom: 20px; font-size: 0.9rem; }
-.nav-back { display: inline-block; margin-bottom: 16px; color: var(--accent);
+       background: #f4f6f9; color: #2c3e50; padding: 32px 24px; }
+.container { max-width: 640px; margin: 60px auto; }
+header { background: #1a252f; color: #fff; border-radius: 10px;
+         padding: 28px 32px; margin-bottom: 28px; }
+header h1 { font-size: 1.5rem; font-weight: 700; margin-bottom: 6px; }
+header p  { font-size: 0.85rem; color: #aab7b8; }
+.badge { display: inline-block; background: #27ae60; color: #fff;
+         font-size: 0.7rem; font-weight: 600; padding: 2px 8px;
+         border-radius: 20px; margin-left: 8px; vertical-align: middle; }
+.card { background: #fff; border-radius: 10px; padding: 28px 32px;
+        box-shadow: 0 1px 4px rgba(0,0,0,.08); }
+.field { margin-bottom: 18px; }
+label { display: block; font-size: 0.8rem; font-weight: 600; color: #566573;
+        text-transform: uppercase; letter-spacing: .04em; margin-bottom: 6px; }
+.radio-row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px;
+             font-size: 0.95rem; font-weight: 500; text-transform: none;
+             letter-spacing: normal; color: #2c3e50; }
+input[type=text], select { width: 100%; padding: 10px 12px; border: 1px solid #dfe4ea;
+       border-radius: 6px; font-size: 0.9rem; font-family: inherit; }
+button { width: 100%; background: #2980b9; color: #fff; border: none;
+         border-radius: 6px; padding: 13px; font-size: 0.95rem; font-weight: 600;
+         cursor: pointer; margin-top: 8px; }
+button:hover { background: #21618c; }
+button:disabled { background: #95a5a6; cursor: wait; }
+.error { background: #fdf2f2; border: 1px solid #c0392b; color: #922b21;
+         border-radius: 8px; padding: 16px 20px; margin-bottom: 20px; font-size: 0.9rem; }
+.nav-back { display: inline-block; margin-bottom: 16px; color: #2980b9;
             text-decoration: none; font-size: 0.85rem; font-weight: 600; }
 .nav-back:hover { text-decoration: underline; }
-.empty-state { font-size: 0.82rem; color: var(--muted); padding: 10px 2px; line-height: 1.6; }
-.empty-state code { background: #eef1f4; padding: 1px 5px; border-radius: 4px; }
-ul.report-list { list-style: none; }
-ul.report-list li { padding: 11px 0; border-bottom: 1px solid var(--line); }
-ul.report-list li:last-child { border-bottom: none; }
-ul.report-list a { color: var(--ink); font-weight: 600; font-size: 0.86rem; text-decoration: none; }
-ul.report-list a:hover { color: var(--accent); }
-ul.report-list .meta { display: block; font-size: 0.74rem; color: var(--muted); margin-top: 2px; }
-.stat-row { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 4px; }
-.stat-pill { background: #eef1f4; border-radius: 20px; padding: 4px 12px; font-size: 0.72rem;
-             font-weight: 700; color: #566573; }
-"""
-
-_JS = """
-function selectSource(el) {
-  document.querySelectorAll('.tile[data-group="source"]').forEach(t => t.classList.remove('selected'));
-  el.classList.add('selected');
-  const val = el.querySelector('input').value;
-  document.getElementById('folder-fields').style.display = val === 'folder' ? 'block' : 'none';
-  document.getElementById('whatsapp-fields').style.display = val === 'whatsapp' ? 'block' : 'none';
-}
-function selectFolderTile(el) {
-  document.querySelectorAll('.tile[data-group="folder"]').forEach(t => t.classList.remove('selected'));
-  el.classList.add('selected');
-  document.getElementById('receipts_dir').value = el.querySelector('input').value;
-}
-function onSubmitForm() {
-  const b = document.getElementById('btn');
-  b.disabled = true;
-  b.textContent = 'Procesando… puede tardar un minuto';
-  return true;
-}
 """
 
 
@@ -172,228 +187,50 @@ def _page(body: str) -> str:
 </head>
 <body>
 <div class="container">{body}</div>
-<script>{_JS}</script>
 </body>
 </html>"""
 
 
-_SUPPORTED_EXT = {".png", ".jpg", ".jpeg", ".pdf", ".tiff", ".bmp"}
-
-
-def _discover_receipt_sources() -> list[dict]:
-    """Any top-level data/ subfolder (besides the WhatsApp intake) that holds
-    at least one receipt-shaped file. Built from disk, not hardcoded, so a
-    freshly generated dataset just shows up."""
-    sources = []
-    if not DATA_DIR.exists():
-        return sources
-    for entry in sorted(DATA_DIR.iterdir()):
-        if not entry.is_dir() or entry.name == "whatsapp_intake":
-            continue
-        count = sum(1 for f in entry.iterdir() if f.is_file() and f.suffix.lower() in _SUPPORTED_EXT)
-        if count:
-            sources.append({"path": str(entry).replace("\\", "/"), "label": entry.name, "count": count})
-    return sources
-
-
-def _discover_bank_csvs() -> list[dict]:
-    if not DATA_DIR.exists():
-        return []
-    options = []
-    for f in sorted(DATA_DIR.glob("*.csv")):
-        try:
-            rows = max(sum(1 for _ in f.open(encoding="utf-8")) - 1, 0)
-        except OSError:
-            rows = None
-        options.append({"path": str(f).replace("\\", "/"), "rows": rows})
-    return options
-
-
-def _available_whatsapp_months() -> list[dict]:
+def _available_whatsapp_months() -> list[str]:
     if not monthly_dataset.DATA_ROOT.exists():
         return []
-    months = []
-    for p in sorted(monthly_dataset.DATA_ROOT.iterdir(), reverse=True):
-        if not p.is_dir():
-            continue
-        count = len(monthly_dataset.load(p.name))
-        months.append({"month": p.name, "count": count})
-    return months
+    return sorted(p.name for p in monthly_dataset.DATA_ROOT.iterdir() if p.is_dir())
 
 
-_REPORT_NAME_RE = re.compile(r"^reconciliation_(?P<tag>.+)_(?P<ts>\d{8}_\d{6})\.html$")
-
-
-def _recent_reports(limit: int = 8) -> list[dict]:
-    if not REPORTS_DIR.exists():
-        return []
-    files = sorted(
-        (p for p in REPORTS_DIR.glob("reconciliation_*.html") if p.name != "reconciliation_report.html"),
-        key=lambda p: p.stat().st_mtime,
-        reverse=True,
-    )
-    out = []
-    for f in files[:limit]:
-        m = _REPORT_NAME_RE.match(f.name)
-        when = dt.datetime.fromtimestamp(f.stat().st_mtime)
-        label = m.group("tag").replace("_", " ") if m else f.stem
-        out.append({
-            "name": f.name,
-            "label": label,
-            "when": when.strftime("%d/%m/%Y %H:%M"),
-        })
-    return out
-
-
-def _slugify(text: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-") or "run"
-
-
-@app.get("/", response_class=HTMLResponse)
+@app.get("/classic", response_class=HTMLResponse)
 def index() -> str:
-    sources = _discover_receipt_sources()
-    bank_csvs = _discover_bank_csvs()
     months = _available_whatsapp_months()
-    reports = _recent_reports()
-
-    if sources:
-        default_folder = sources[0]["path"]
-        folder_tiles = "".join(
-            f'''<label class="tile{" selected" if i == 0 else ""}" data-group="folder" onclick="selectFolderTile(this)">
-                  <input type="radio" name="source_folder_pick" value="{html.escape(s["path"])}" {"checked" if i == 0 else ""}>
-                  <div class="tile-title">📁 {html.escape(s["label"])}</div>
-                  <div class="tile-sub">{s["count"]} archivo{"s" if s["count"] != 1 else ""}</div>
-                  <div class="tile-check"></div>
-                </label>'''
-            for i, s in enumerate(sources)
-        )
-    else:
-        default_folder = "data/receipts"
-        folder_tiles = '<div class="empty-state">No hay carpetas con recibos en <code>data/</code> todavía.</div>'
-
-    folder_datalist = "".join(f'<option value="{html.escape(s["path"])}">' for s in sources)
-
-    if bank_csvs:
-        default_bank_csv = bank_csvs[0]["path"]
-    else:
-        default_bank_csv = "data/bank_statement.csv"
-    bank_datalist = "".join(
-        f'<option value="{html.escape(b["path"])}">{b["rows"]} filas</option>' for b in bank_csvs
+    month_options = "".join(f'<option value="{m}">{m}</option>' for m in months) or (
+        '<option value="" disabled selected>(corré el simulador primero)</option>'
     )
-
-    if months:
-        month_options = "".join(
-            f'<option value="{m["month"]}">{m["month"]} &middot; {m["count"]} recibos</option>'
-            for m in months
-        )
-    else:
-        month_options = '<option value="" disabled selected>(no hay meses cargados -- corré el simulador o generate_whatsapp_demo_data.py)</option>'
-
-    if reports:
-        reports_html = "<ul class=\"report-list\">" + "".join(
-            f'''<li><a href="/report-files/{html.escape(r["name"])}" target="_blank">{html.escape(r["label"])}</a>
-                  <span class="meta">{r["when"]}</span></li>'''
-            for r in reports
-        ) + "</ul>"
-    else:
-        reports_html = '<div class="empty-state">Todavía no corriste ninguna reconciliación. El historial va a aparecer acá.</div>'
-
-    total_receipts = sum(s["count"] for s in sources) + sum(m["count"] for m in months)
-
     return _page(f"""
-<header class="top">
+<header>
   <h1>Agente de Reconciliación <span class="badge">100% local</span></h1>
-  <p>El OCR y el cruce contra el banco corren en esta máquina vía QVAC -- nada de esto sale de tu red.
-     Elegí de dónde vienen los recibos y reconciliá contra un extracto bancario.</p>
+  <p>El OCR y el cruce contra el banco corren en esta máquina vía QVAC. Elegí de dónde vienen los recibos y reconciliá.</p>
 </header>
-
-<div class="grid two">
-  <form class="card" method="post" action="/reconcile" onsubmit="return onSubmitForm();">
-    <h2>Fuente de recibos</h2>
-    <div class="field">
-      <div class="source-tiles">
-        <label class="tile selected" data-group="source" onclick="selectSource(this)">
-          <input type="radio" name="source" value="folder" checked>
-          <div class="tile-title">📁 Carpeta local</div>
-          <div class="tile-sub">{len(sources)} carpeta{"s" if len(sources) != 1 else ""} disponible{"s" if len(sources) != 1 else ""}</div>
-          <div class="tile-check"></div>
-        </label>
-        <label class="tile" data-group="source" onclick="selectSource(this)">
-          <input type="radio" name="source" value="whatsapp">
-          <div class="tile-title">💬 WhatsApp (mensual)</div>
-          <div class="tile-sub">{len(months)} mes{"es" if len(months) != 1 else ""} cargado{"s" if len(months) != 1 else ""}</div>
-          <div class="tile-check"></div>
-        </label>
-      </div>
+<form class="card" method="post" action="/reconcile"
+      onsubmit="const b=document.getElementById('btn'); b.disabled=true; b.textContent='Procesando… puede tardar un minuto';">
+  <div class="field">
+    <label class="radio-row"><input type="radio" name="source" value="folder" checked
+      onchange="document.getElementById('folder-fields').style.display='block';document.getElementById('whatsapp-fields').style.display='none';">
+      Carpeta local de recibos</label>
+    <div id="folder-fields">
+      <input type="text" name="receipts_dir" value="data/receipts" placeholder="data/receipts">
     </div>
-
-    <div id="folder-fields" class="field">
-      <label class="field-label" for="receipts_dir">Carpeta de recibos</label>
-      <input type="text" id="receipts_dir" name="receipts_dir" value="{html.escape(default_folder)}"
-             list="folder-options" placeholder="data/receipts">
-      <datalist id="folder-options">{folder_datalist}</datalist>
-      <div class="source-tiles" style="margin-top:10px">{folder_tiles}</div>
-    </div>
-
-    <div id="whatsapp-fields" class="field" style="display:none">
-      <label class="field-label" for="whatsapp_month">Mes del dataset</label>
-      <select id="whatsapp_month" name="whatsapp_month">{month_options}</select>
-      <div class="hint">Recibos ya procesados por QVAC al momento de la ingesta -- esta reconciliación no vuelve a correr OCR.</div>
-    </div>
-
-    <div class="field">
-      <label class="field-label" for="bank_csv">Extracto bancario (CSV)</label>
-      <input type="text" id="bank_csv" name="bank_csv" value="{html.escape(default_bank_csv)}"
-             list="bank-options" placeholder="data/bank_statement.csv">
-      <datalist id="bank-options">{bank_datalist}</datalist>
-    </div>
-
-    <details class="adv">
-      <summary>Configuración avanzada de matching</summary>
-      <div class="adv-body">
-        <div class="two-col">
-          <div class="field">
-            <label class="field-label" for="date_tolerance_days">Tolerancia de fecha (días)</label>
-            <input type="number" id="date_tolerance_days" name="date_tolerance_days" value="3" min="0" max="30">
-          </div>
-          <div class="field">
-            <label class="field-label" for="amount_tolerance">Tolerancia de monto ($)</label>
-            <input type="number" id="amount_tolerance" name="amount_tolerance" value="0.01" min="0" step="0.01">
-          </div>
-          <div class="field">
-            <label class="field-label" for="merchant_match_threshold">Umbral fuzzy-match comercio (0-100)</label>
-            <input type="number" id="merchant_match_threshold" name="merchant_match_threshold" value="60" min="0" max="100">
-          </div>
-          <div class="field">
-            <label class="field-label" for="large_unmatched_amount">Cargo sin recibo = CRITICAL desde</label>
-            <input type="number" id="large_unmatched_amount" name="large_unmatched_amount" value="200" min="0" step="1">
-          </div>
-        </div>
-        <div class="hint">Si tu extracto está en ARS (o cualquier moneda de montos grandes), subí el último valor -- si no, casi todo cargo sin recibo va a salir CRITICAL.</div>
-      </div>
-    </details>
-
-    <button id="btn" type="submit" class="primary">Reconciliar</button>
-  </form>
-
-  <div class="grid" style="gap:20px">
-    <div class="card">
-      <h2>Estado de los datos</h2>
-      <div class="stat-row">
-        <span class="stat-pill">{len(sources)} carpetas locales</span>
-        <span class="stat-pill">{len(months)} meses WhatsApp</span>
-        <span class="stat-pill">{len(bank_csvs)} extractos bancarios</span>
-        <span class="stat-pill">{total_receipts} recibos en total</span>
-      </div>
-      <div class="hint">Generá más datos de prueba con <code>python scripts/generate_sample_data.py</code> (carpeta local) o
-        <code>python scripts/generate_whatsapp_demo_data.py</code> (varios meses de WhatsApp, sin necesitar QVAC corriendo).</div>
-    </div>
-    <div class="card">
-      <h2>Reportes recientes</h2>
-      {reports_html}
+    <label class="radio-row" style="margin-top:14px">
+      <input type="radio" name="source" value="whatsapp"
+      onchange="document.getElementById('folder-fields').style.display='none';document.getElementById('whatsapp-fields').style.display='block';">
+      Dataset de WhatsApp (mensual)</label>
+    <div id="whatsapp-fields" style="display:none">
+      <select name="whatsapp_month">{month_options}</select>
     </div>
   </div>
-</div>
+  <div class="field">
+    <label for="bank_csv">Extracto bancario (CSV)</label>
+    <input type="text" id="bank_csv" name="bank_csv" value="data/bank_statement.csv">
+  </div>
+  <button id="btn" type="submit">Reconciliar</button>
+</form>
 """)
 
 
@@ -403,67 +240,235 @@ def do_reconcile(
     receipts_dir: str = Form("data/receipts"),
     whatsapp_month: str = Form(""),
     bank_csv: str = Form("data/bank_statement.csv"),
-    date_tolerance_days: int = Form(3),
-    amount_tolerance: float = Form(0.01),
-    merchant_match_threshold: float = Form(60.0),
-    large_unmatched_amount: float = Form(200.0),
 ) -> str:
     back = '<a class="nav-back" href="/">&larr; Nueva reconciliación</a>'
 
-    try:
-        bank_df = load_bank_statement(Path(bank_csv))
-    except BankStatementError as exc:
-        return _page(f'{back}<div class="error">{exc}</div>')
-
-    if source == "whatsapp":
-        if not whatsapp_month:
-            return _page(f'{back}<div class="error">Elegí un mes del dataset de WhatsApp.</div>')
-        receipts = monthly_dataset.load(whatsapp_month)
-        tag = whatsapp_month
-    else:
-        try:
-            files = discover_receipt_files(Path(receipts_dir))
-        except FileNotFoundError as exc:
-            return _page(f'{back}<div class="error">{exc}</div>')
-
-        engine = _get_engine()
-        if not engine.is_available():
-            return _page(
-                f'{back}<div class="error">El worker de QVAC no está disponible. '
-                "Instalalo con <code>npm install -g @qvac/sdk@0.17.1</code> y "
-                "seteá <code>QVAC_SDK_DIR</code> antes de levantar este servidor.</div>"
-            )
-        receipts: list[Receipt] = []
-        for path in files:
-            try:
-                ocr_result = engine.read(path)
-            except OcrEngineError as exc:
-                logger.warning("Skipping %s: %s", path.name, exc)
-                continue
-            receipts.append(parse_receipt(ocr_result, path))
-        tag = Path(receipts_dir).name or "carpeta"
-
-    try:
-        settings = Settings(
-            receipts_dir=Path(receipts_dir),
-            bank_csv=Path(bank_csv),
-            output_path=Path("reports/reconciliation_report.txt"),
-            date_tolerance_days=date_tolerance_days,
-            amount_tolerance=amount_tolerance,
-            merchant_match_threshold=merchant_match_threshold,
-            large_unmatched_amount=large_unmatched_amount,
-        )
-    except ValueError as exc:
-        return _page(f'{back}<div class="error">Configuración avanzada inválida: {exc}</div>')
-
-    result = reconcile(receipts, bank_df, settings)
-
-    run_id = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_base = REPORTS_DIR / f"reconciliation_{_slugify(tag)}_{run_id}"
-    write_text_report(result, output_base.with_suffix(".txt"))
-    write_html_report(result, output_base.with_suffix(".html"))
-    # Also keep the fixed CLI-documented path pointing at the latest run.
-    write_text_report(result, Path("reports/reconciliation_report.txt"))
-    write_html_report(result, Path("reports/reconciliation_report.html"))
+    result, error = _run_reconciliation(source, receipts_dir, whatsapp_month, bank_csv)
+    if error is not None:
+        return _page(f'{back}<div class="error">{error}</div>')
 
     return render_html_report(result, nav_html=back)
+
+
+# --- JSON API (consumed by the React SPA) ---------------------------------
+
+
+@app.get("/api/health")
+def api_health() -> dict:
+    """Cheap readiness probe; also reports whether the QVAC worker is up."""
+    return {
+        "status": "ok",
+        "qvac_available": _get_engine().is_available(),
+    }
+
+
+@app.get("/api/months")
+def api_months() -> dict:
+    """List the WhatsApp-intake months that have an accumulated dataset."""
+    return {"months": _available_whatsapp_months()}
+
+
+@app.post("/api/reconcile")
+def api_reconcile(
+    source: str = Form(...),
+    receipts_dir: str = Form("data/receipts"),
+    whatsapp_month: str = Form(""),
+    bank_csv: str = Form("data/bank_statement.csv"),
+) -> JSONResponse:
+    """Run the pipeline and return the full result as JSON for the SPA."""
+    result, error = _run_reconciliation(source, receipts_dir, whatsapp_month, bank_csv)
+    if error is not None:
+        return JSONResponse(status_code=400, content={"error": error})
+    return JSONResponse(content=result_to_dict(result))
+
+
+# --- Dashboard de Zira: dueño + contador ----------------------------------
+
+
+def _load_income(path: str) -> pd.DataFrame:
+    """Carga el CSV de ingresos (cobros a clientes). Columnas: date, amount, client."""
+    p = Path(path)
+    if not p.exists():
+        return pd.DataFrame(columns=["date", "amount", "client", "description"])
+    df = pd.read_csv(p)
+    df.columns = [c.strip().lower() for c in df.columns]
+    df["amount"] = (
+        df["amount"].astype(str).str.replace(r"[^\d.\-]", "", regex=True).astype(float)
+    )
+    df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.date
+    if "client" not in df.columns:
+        df["client"] = "Cliente"
+    return df
+
+
+def _load_demo_receipts(receipts_dir: str) -> list[Receipt]:
+    """OCR de los recibos de la carpeta (QVAC si está, si no sidecars)."""
+    try:
+        files = discover_receipt_files(Path(receipts_dir))
+    except FileNotFoundError:
+        return []
+    engine = _get_engine()
+    active = engine if engine.is_available() else SidecarOcrEngine()
+    receipts: list[Receipt] = []
+    for path in files:
+        try:
+            receipts.append(parse_receipt(active.read(path), path))
+        except OcrEngineError:
+            continue
+    return receipts
+
+
+@app.get("/api/owner/dashboard")
+def api_owner_dashboard(
+    income_csv: str = _DEFAULT_INCOME,
+    expense_csv: str = _DEFAULT_EXPENSES,
+) -> JSONResponse:
+    """Vista del DUEÑO: ingresos, egresos, ganancia y rubros de gasto."""
+    try:
+        expense_df = load_bank_statement(Path(expense_csv))
+    except BankStatementError as exc:
+        return JSONResponse(status_code=400, content={"error": str(exc)})
+    income_df = _load_income(income_csv)
+    return JSONResponse(content=dashboard.owner_dashboard(income_df, expense_df))
+
+
+@app.get("/api/zira/dashboard")
+def api_zira_dashboard(movements_csv: str = ledger.MOVEMENTS_CSV) -> JSONResponse:
+    """Dashboard del dueño: dataset de ZIRA + facturas subidas por el contador.
+
+    El agente clasifica ingreso/egreso por el rol de ZIRA y calcula
+    automáticamente ingresos, egresos, ganancia y los rubros (de gasto y de
+    ingreso). Todo lo que se sube en el área contable se refleja acá.
+    """
+    return JSONResponse(content=ledger.owner_dashboard(movements_csv))
+
+
+@app.get("/api/accountant/ledger")
+def api_accountant_ledger(movements_csv: str = ledger.MOVEMENTS_CSV) -> JSONResponse:
+    """Vista del CONTADOR sobre el MISMO contenedor de facturas que el dueño.
+
+    Proveedores (egresos) y clientes (ingresos), cada uno con la lista de sus
+    facturas y su rubro, más las alertas para revisar. Incluye lo subido.
+    """
+    return JSONResponse(content=ledger.accountant_ledger(movements_csv))
+
+
+@app.get("/api/invoices")
+def api_invoices(movements_csv: str = ledger.MOVEMENTS_CSV) -> JSONResponse:
+    """Contenedor completo de facturas (dataset + subidas), con alertas."""
+    return JSONResponse(content={"invoices": ledger.all_invoices(movements_csv)})
+
+
+def _ocr_uploaded(tmp_path: Path, demo_match: Path):
+    """Cadena de OCR para archivos subidos: QVAC -> Tesseract -> sidecar de demo.
+
+    Devuelve (OcrResult, engine_name) o lanza OcrEngineError si ninguno pudo.
+    """
+    qvac = _get_engine()
+    if qvac.is_available():
+        return qvac.read(tmp_path), "qvac"
+
+    tess = TesseractOcrEngine()
+    if tess.is_available():
+        return tess.read(tmp_path), "tesseract"
+
+    sidecar = SidecarOcrEngine()
+    if demo_match.exists() and sidecar.has_sidecar(demo_match):
+        return sidecar.read(demo_match), "sidecar"
+
+    raise OcrEngineError(
+        "No hay ningún motor de OCR disponible (ni QVAC, ni Tesseract, ni un "
+        "sidecar pre-computado para este archivo)."
+    )
+
+
+@app.post("/api/analyze")
+async def api_analyze(file: UploadFile = File(...)) -> JSONResponse:
+    """Sube una foto/archivo de un comprobante y lo clasifica con IA.
+
+    Corre OCR local (QVAC si está; si no, Tesseract; si no, sidecar de demo),
+    extrae los campos y detecta si es INGRESO o EGRESO según el rol de ZIRA en
+    el comprobante (emisor -> venta -> ingreso; receptor -> compra -> egreso).
+    Devuelve además el rubro y un ID de contraparte estable para el libro mayor.
+    """
+    suffix = Path(file.filename or "upload").suffix or ".bin"
+    data = await file.read()
+    demo_match = Path(_DEFAULT_RECEIPTS) / (file.filename or "")
+
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=True) as tmp:
+        tmp.write(data)
+        tmp.flush()
+        try:
+            ocr, engine_name = _ocr_uploaded(Path(tmp.name), demo_match)
+        except OcrEngineError as exc:
+            return JSONResponse(status_code=400, content={"error": str(exc)})
+        receipt = parse_receipt(ocr, Path(file.filename or "upload"))
+
+    # Detección ingreso/egreso por el rol de ZIRA en el texto del comprobante.
+    detection = movements.detect_from_text(receipt.raw_text, receipt.merchant)
+    direction = detection["direction"]
+    counterparty = detection["counterparty"] or receipt.merchant
+    cat = categorize(counterparty)
+    prefix = "CLI" if direction == "ingreso" else "PROV"
+    party_id = ledger._stable_id(prefix, counterparty or "desconocido")
+
+    # Estimación de IVA (los comprobantes AR discriminan IVA al 21%).
+    amount = receipt.amount or 0.0
+    iva_est = round(amount - amount / 1.21, 2) if amount else 0.0
+
+    # Persistimos la factura en el contenedor -> se refleja en dueño y contador.
+    invoice = {
+        "id": f"UP-{int(time.time() * 1000) % 10_000_000:07d}",
+        "direction": direction,
+        "date": receipt.txn_date.isoformat() if receipt.txn_date else None,
+        "counterparty": counterparty or "Desconocido",
+        "counterparty_cuit": (detection["cuits_found"] or [""])[0] if detection["cuits_found"] else "",
+        "concept": f"Comprobante subido ({file.filename})",
+        "category": cat.label,
+        "category_key": cat.key,
+        "category_color": cat.color,
+        "amount": round(amount, 2),
+        "net": round(amount - iva_est, 2),
+        "iva": iva_est,
+        "source": "upload",
+        "fully_parsed": receipt.is_fully_parsed,
+        "filename": file.filename,
+    }
+    ledger.append_uploaded(invoice)
+
+    return JSONResponse(content={
+        **invoice,
+        "engine": engine_name,
+        "direction_confidence": detection["confidence"],
+        "zira_detected": detection["zira_detected"],
+        "party_id": party_id,
+        "role": "Cliente" if direction == "ingreso" else "Proveedor",
+        "cuits_found": detection["cuits_found"],
+        "raw_text": receipt.raw_text[:600],
+        "registered": True,
+    })
+
+
+# --- Serve the built React SPA (production) -------------------------------
+# `cd frontend && npm run build` emits into static/. When present, the SPA
+# is served at "/"; if it hasn't been built yet, "/" falls back to a hint
+# pointing at the classic no-JS form. The dev workflow uses Vite on :5173
+# with a proxy to this API, so this only matters for the bundled build.
+
+_STATIC_DIR = Path(__file__).parent / "static"
+
+
+@app.get("/", response_class=HTMLResponse)
+def spa_root() -> str:
+    index_file = _STATIC_DIR / "index.html"
+    if index_file.exists():
+        return index_file.read_text(encoding="utf-8")
+    return _page(
+        '<div class="card">La interfaz React no está compilada todavía. '
+        "Corré <code>cd frontend &amp;&amp; npm install &amp;&amp; npm run build</code>, "
+        'o usá el formulario clásico en <a href="/classic">/classic</a>.</div>'
+    )
+
+
+if _STATIC_DIR.exists():
+    app.mount("/assets", StaticFiles(directory=_STATIC_DIR / "assets"), name="assets")

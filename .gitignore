@@ -37,3 +37,15 @@ data/whatsapp_intake/
 Thumbs.db
 .vscode/
 .idea/
+
+# Frontend (React/Vite) -- node_modules and local caches never go in git
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+npm-debug.log*
+
+# Uploaded-invoices container -- accumulates at runtime, not a static asset
+data/uploaded_invoices.jsonl
+
+# Generated PDF reports
+reports/*.pdf

@@ -74,3 +74,9 @@ pytest
 ```
 
 QVAC and the Meta API are mocked — no credentials or network needed.
+
+## Builders Contact
+
+- Felipe Bridge — https://www.linkedin.com/in/felipebridge/
+- Emiliano Lescuras — https://www.linkedin.com/in/emilianolescuras/
+- Matias Bellido — https://www.linkedin.com/in/matiasbellido

@@ -4,6 +4,8 @@ An agent for small accounting firms: it reconciles client receipts against bank 
 
 Built for the **Tether QVAC Track: Local agents for operations work**.
 
+![Workflow](Images/Workflow-ZYRA.png)
+
 ## The problem
 
 Small accounting firms reconcile client receipts against bank statements by hand every month — hunting for duplicate charges, mismatched amounts, and unexplained bank fees. The data is sensitive (client financials, covered by professional confidentiality), so it can't be sent to a cloud LLM API. This agent automates the reconciliation while keeping all inference on-device.

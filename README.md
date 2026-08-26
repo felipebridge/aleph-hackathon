@@ -1,3 +1,5 @@
+
+
 <h1 align="center">Aleph Hackathon 2026</h1>
 
 ![Banner](Images/banner.jpeg)
@@ -37,6 +39,8 @@ export QVAC_SDK_DIR="$(npm root -g)/@qvac/sdk"        # Windows: $env:QVAC_SDK_D
 python scripts/generate_sample_data.py   # demo dataset: 21 receipts + bank_statement.csv
 python main.py                           # runs OCR + reconciliation, writes reports/
 ```
+
+The first `python main.py` run downloads the QVAC model (~2.2 GB).
 
 Exits with code `2` if a CRITICAL discrepancy is found (useful for cron/CI). Key CLI flags: `--receipts-dir`, `--bank-csv`, `--whatsapp-month`, `--date-tolerance-days`, `--amount-tolerance`, `--merchant-threshold`, `--large-unmatched-amount`.
 
